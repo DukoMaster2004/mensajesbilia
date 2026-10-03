@@ -1,0 +1,13 @@
+# Airlock bootstrap
+.windsurf/
+
+# React web app
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+Resources/*.json
+Resources/bro_branham_sermons_completo.json
+Resources/bro_branham_sermons_es.json
+Resources/Secrets.swift

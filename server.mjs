@@ -1,0 +1,458 @@
+import { getBible, searchVerses, verseRange, pickVerse, parseReference, strip } from "./bible.mjs";
+import "dotenv/config";
+import express from "express";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createServer as createViteServer } from "vite";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const catalogPath = path.join(__dirname, "Resources", "bro_branham_sermons_es.json");
+const audioCatalogPath = path.join(__dirname, "Resources", "branham_audio_catalog.json");
+const port = Number(process.env.PORT || 5173);
+const app = express();
+
+app.use(express.json({ limit: "64kb" }));
+
+let catalogPromise;
+let audioCatalogPromise;
+function getCatalog() {
+  catalogPromise ??= readFile(catalogPath, "utf8").then((contents) => {
+    const catalog = JSON.parse(contents);
+    if (!Array.isArray(catalog.sermons)) {
+      throw new Error("El catálogo no contiene una lista válida de mensajes.");
+    }
+    return catalog.sermons;
+  });
+  return catalogPromise;
+}
+
+function getAudioCatalog() {
+  audioCatalogPromise ??= readFile(audioCatalogPath, "utf8").then((contents) => {
+    const catalog = JSON.parse(contents);
+    if (!Array.isArray(catalog)) {
+      throw new Error("El catálogo de audio no contiene una lista válida de mensajes.");
+    }
+    return catalog;
+  });
+  return audioCatalogPromise;
+}
+
+async function getSpanishAudio(id) {
+  const catalog = await getAudioCatalog();
+  const matches = catalog.filter((entry) => entry.code === id && entry.audio);
+  const match = matches.find((entry) => entry.lang === "SPN");
+  if (!match) return "";
+  const url = new URL(match.audio);
+  return url.protocol === "https:" ? url.href : "";
+}
+
+function getSummary(sermon) {
+  return {
+    id: sermon.id,
+    title: sermon.title,
+    date: sermon.date ?? sermon.meta?.date ?? "",
+    location: sermon.location ?? sermon.meta?.location ?? "",
+    paragraphCount: sermon.paragraphs?.length ?? 0,
+  };
+}
+
+function normalize(value) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("es")
+    .trim();
+}
+
+function queryTerms(query) {
+  const ignored = new Set([
+    "a", "al", "algo", "como", "con", "cual", "cuando", "de", "del", "donde",
+    "el", "ella", "en", "es", "esa", "ese", "esta", "este", "la", "las", "lo",
+    "los", "mas", "me", "mi", "para", "por", "que", "se", "sin", "sobre", "su",
+    "sus", "un", "una", "y", "yo", "dime", "podrias", "quisiera", "mensaje",
+    "mensajes", "sermon", "sermones", "william", "branham",
+    "dice", "dijo", "habla", "hablan", "ensenar", "ensena",
+  ]);
+  return [...new Set(normalize(query).split(/[^\p{L}\p{N}]+/u)
+    .filter((term) => (term.length > 2 || term === "fe") && !ignored.has(term)))];
+}
+
+function searchTerms(query) {
+  return normalize(query).split(/[^\p{L}\p{N}]+/u).filter((term) => term.length > 1);
+}
+
+function searchParagraphs(sermons, query, limit = 5) {
+  const terms = queryTerms(query);
+  if (!terms.length) return [];
+
+  const termSet = new Set(terms);
+  const documentFrequency = new Map(terms.map((term) => [term, 0]));
+  const results = [];
+  let paragraphCount = 0;
+  for (const sermon of sermons) {
+    for (const paragraph of sermon.paragraphs ?? []) {
+      paragraphCount += 1;
+      const words = normalize(paragraph.text).split(/[^\p{L}\p{N}]+/u);
+      const wordCounts = new Map();
+      for (const word of words) {
+        if (termSet.has(word)) wordCounts.set(word, (wordCounts.get(word) ?? 0) + 1);
+      }
+      if (!wordCounts.size) continue;
+      for (const term of terms) {
+        if (wordCounts.has(term)) {
+          documentFrequency.set(term, documentFrequency.get(term) + 1);
+        }
+      }
+      results.push({
+        wordCounts,
+        source: {
+          id: sermon.id,
+          code: sermon.id,
+          title: sermon.title,
+          number: paragraph.number,
+          text: paragraph.text,
+        },
+      });
+    }
+  }
+
+  const ranked = results.map(({ source, wordCounts }) => {
+    let score = 0;
+    let matchedTerms = 0;
+    for (const term of terms) {
+      const frequency = wordCounts.get(term) ?? 0;
+      if (!frequency) continue;
+      matchedTerms += 1;
+      const inverseFrequency = Math.log1p(
+        (paragraphCount - documentFrequency.get(term) + 0.5)
+          / (documentFrequency.get(term) + 0.5),
+      );
+      score += inverseFrequency * (1 + Math.min(frequency - 1, 3) * 0.15);
+    }
+    score *= 1 + matchedTerms / terms.length;
+    return { ...source, score };
+  }).sort((a, b) => b.score - a.score || a.code.localeCompare(b.code) || a.number - b.number);
+
+  const selected = [];
+  const sermonCounts = new Map();
+  for (const result of ranked) {
+    const count = sermonCounts.get(result.id) ?? 0;
+    if (count >= 2) continue;
+    selected.push(result);
+    sermonCounts.set(result.id, count + 1);
+    if (selected.length === limit) break;
+  }
+  return selected;
+}
+
+app.get("/api/health", (_request, response) => {
+  response.json({ ok: true });
+});
+
+app.get("/api/bible/books", async (_request, response, next) => {
+  try {
+    const bible = await getBible();
+    response.json({
+      translation: bible.translation,
+      books: bible.books.map((book, index) => ({ index, name: book.name, chapters: book.chapters.length })),
+    });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/bible/chapter/:book/:chapter", async (request, response, next) => {
+  try {
+    const bible = await getBible();
+    const book = bible.books[Number(request.params.book)];
+    const verses = book?.chapters[Number(request.params.chapter) - 1];
+    if (!verses) { response.status(404).json({ error: "Capítulo no encontrado." }); return; }
+    response.json({ book: book.name, chapter: Number(request.params.chapter), chapters: book.chapters.length, verses: verses.map((text, i) => ({ verse: i + 1, text })) });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/bible/search", async (request, response, next) => {
+  try {
+    const bible = await getBible();
+    const q = String(request.query.q ?? "").trim().slice(0, 200);
+    response.json({ verses: q.length < 2 ? [] : searchVerses(bible, q, 30).map(pickVerse) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/bible/chat", async (request, response, next) => {
+  try {
+    const apiKey = process.env.GEMINI_BIBLE_API_KEY || process.env.GEMINI_API_KEY;
+    if (!apiKey) { response.status(503).json({ error: "La IA de la Biblia aún no está configurada. Añade GEMINI_BIBLE_API_KEY al entorno del servidor." }); return; }
+    const question = String(request.body?.question ?? "").trim().slice(0, 600);
+    if (!question) { response.status(400).json({ error: "Escribe una pregunta antes de enviar." }); return; }
+
+    const bible = await getBible();
+    // Gemini solo amplía la pregunta con palabras clave; los versículos salen del archivo.
+    let extra = "";
+    try {
+      const kw = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(process.env.GEMINI_MODEL || "gemini-3.1-flash-lite")}:generateContent?key=${encodeURIComponent(apiKey)}`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(20_000),
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: `Da de 6 a 10 palabras clave en español (sinónimos y formas bíblicas antiguas, como en la Reina-Valera 1960) para buscar versículos que respondan: "${question}". Responde solo las palabras separadas por espacios.` }] }],
+            generationConfig: { temperature: 0, maxOutputTokens: 80 },
+          }) },
+      );
+      const kp = await kw.json().catch(() => ({}));
+      extra = String(kp?.candidates?.[0]?.content?.parts?.map((x) => x.text ?? "").join(" ") ?? "").slice(0, 200);
+    } catch { /* se usa solo la pregunta */ }
+    const candidates = searchVerses(bible, `${question} ${extra}`, 14);
+    if (!candidates.length) {
+      response.json({ answer: "No encontré versículos que respondan eso en la Biblia (Reina-Valera 1960).", verses: [] });
+      return;
+    }
+    const context = candidates.map((v, i) => `V${i + 1} (${v.book} ${v.chapter}:${v.verse}): ${v.text}`).join("\n");
+    const model = process.env.GEMINI_MODEL || "gemini-3.1-flash-lite";
+    const geminiResponse = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(45_000),
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: [
+            "Eres un asistente de estudio bíblico. Respondes en español usando únicamente los versículos V1, V2… proporcionados (Reina-Valera 1960).",
+            "Elige los 1 a 4 versículos que respondan directamente la pregunta y explica en una o dos oraciones cortas, basándote solo en ellos.",
+            "No uses conocimiento externo ni cites versículos que no estén en la lista. No inventes texto bíblico.",
+            'Devuelve JSON: {"versiculos":[números de V],"explicacion":"..."}.',
+            'Si ningún versículo responde la pregunta, devuelve {"versiculos":[],"explicacion":""}.',
+          ].join(" ") }] },
+          contents: [{ role: "user", parts: [{ text: `${context}\n\nPregunta: ${question}` }] }],
+          generationConfig: { temperature: 0, maxOutputTokens: 600, responseMimeType: "application/json" },
+        }),
+      },
+    );
+    const payload = await geminiResponse.json().catch(() => ({}));
+    if (!geminiResponse.ok) {
+      response.status(geminiResponse.status === 429 ? 429 : 502).json({ error: payload?.error?.message || "No se pudo consultar Gemini. Inténtalo de nuevo." });
+      return;
+    }
+    const raw = payload?.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim();
+    let parsed = {};
+    try { parsed = JSON.parse(String(raw).replace(/^```(?:json)?|```$/g, "").trim()); } catch { parsed = {}; }
+    // El texto bíblico siempre sale del archivo, nunca del modelo.
+    const chosen = [...new Set((Array.isArray(parsed.versiculos) ? parsed.versiculos : []).map((x) => Number(String(x).replace(/\D/g, ""))))]
+      .map((n) => candidates[n - 1]).filter(Boolean).slice(0, 4);
+    if (!chosen.length) {
+      response.json({ answer: "No encontré versículos que respondan eso con precisión en la Biblia (Reina-Valera 1960).", verses: [] });
+      return;
+    }
+    response.json({
+      answer: typeof parsed.explicacion === "string" ? parsed.explicacion.trim().slice(0, 500) : "",
+      verses: chosen.map(pickVerse),
+    });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/sermons", async (request, response, next) => {
+  try {
+    const sermons = await getCatalog();
+    const search = normalize(request.query.search);
+    const terms = searchTerms(search);
+    const offset = Math.max(0, Number.parseInt(request.query.offset, 10) || 0);
+    const limit = Math.min(100, Math.max(1, Number.parseInt(request.query.limit, 10) || 40));
+    const matches = search
+      ? sermons.filter((sermon) => {
+          const metadata = normalize(`${sermon.id} ${sermon.title} ${sermon.date} ${sermon.location}`);
+          return metadata.includes(search)
+            || (sermon.paragraphs ?? []).some((paragraph) => {
+              const text = normalize(paragraph.text);
+              return text.includes(search) || (terms.length > 1 && terms.every((term) => text.includes(term)));
+            });
+        })
+      : sermons;
+    response.json({
+      total: matches.length,
+      sermons: matches.slice(offset, offset + limit).map(getSummary),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/passages", async (request, response, next) => {
+  try {
+    const q = String(request.query.q ?? "").trim().slice(0, 200);
+    if (q.length < 2) {
+      response.json({ passages: [] });
+      return;
+    }
+    const sermons = await getCatalog();
+    const pick = ({ id, title, number, text }) => ({ id, code: id, title, number, text });
+    const ref = q.match(/^(\d{2}-\d{4}[A-Za-z]?)\s*(?:[:,]|\s)\s*(?:p[áa]rrafo\s*)?(\d+)$/i);
+    if (ref) {
+      const sermon = sermons.find((item) => item.id.toLowerCase() === ref[1].toLowerCase());
+      const paragraph = sermon?.paragraphs?.find((item) => item.number === Number(ref[2]));
+      response.json({ passages: paragraph ? [pick({ id: sermon.id, title: sermon.title, ...paragraph })] : [] });
+      return;
+    }
+    response.json({ passages: searchParagraphs(sermons, q, 8).map(pick) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/sermons/:id", async (request, response, next) => {
+  try {
+    const sermons = await getCatalog();
+    const sermon = sermons.find((item) => item.id === request.params.id);
+    if (!sermon) {
+      response.status(404).json({ error: "No se encontró ese mensaje." });
+      return;
+    }
+    response.json({
+      ...getSummary(sermon),
+      audioUrl: await getSpanishAudio(sermon.id),
+      paragraphs: sermon.paragraphs ?? [],
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/chat", async (request, response, next) => {
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      response.status(503).json({
+        error: "El chat aún no está configurado. Añade GEMINI_API_KEY al entorno del servidor y reinícialo.",
+      });
+      return;
+    }
+
+    const question = typeof request.body?.question === "string"
+      ? request.body.question.trim().slice(0, 2000)
+      : "";
+    if (!question) {
+      response.status(400).json({ error: "Escribe una pregunta antes de enviar." });
+      return;
+    }
+
+    const sermons = await getCatalog();
+    const sources = searchParagraphs(sermons, question, 5);
+    if (!sources.length) {
+      response.json({
+        answer: "No encontré evidencia suficiente sobre eso en los mensajes disponibles.",
+        sources: [],
+      });
+      return;
+    }
+
+    const history = Array.isArray(request.body?.history)
+      ? request.body.history.slice(-6).flatMap((message) => {
+          if (!message || message.role !== "user" || typeof message.text !== "string") return [];
+          return [{ role: "user", parts: [{ text: message.text.slice(0, 500) }] }];
+        })
+      : [];
+    const context = sources
+      .map((source, index) => `PASAJE ${index + 1}: ${source.text.slice(0, 1500)}`)
+      .join("\n\n");
+    const asksForDetail = /\b(lista|enumera|puntos|pasos|detalla|detalladamente|con detalle|compara|diferencias|varios|menciona)\b/i.test(question);
+    const maxQuotes = asksForDetail ? 3 : 1;
+    const model = process.env.GEMINI_MODEL || "gemini-3.1-flash-lite";
+    const geminiResponse = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(45_000),
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [{
+              text: [
+                "Eres un buscador de citas en un catálogo de mensajes. No redactas respuestas propias.",
+                "Dada la pregunta, elige de los PASAJES numerados el fragmento que la responde directamente.",
+                `Devuelve hasta ${maxQuotes} cita(s) en JSON: {"citas":[{"pasaje":N,"texto":"..."}]}.`,
+                "El campo texto debe ser una copia LITERAL, carácter por carácter, de una o dos oraciones consecutivas del pasaje elegido. No resumas, no parafrasees, no cambies palabras ni unas fragmentos distantes.",
+                "Si ningún pasaje responde específicamente la pregunta, devuelve {\"citas\":[]}.",
+              ].join(" "),
+            }],
+          },
+          contents: [
+            ...history,
+            { role: "user", parts: [{ text: `${context}\n\nPregunta: ${question}` }] },
+          ],
+          generationConfig: { temperature: 0, maxOutputTokens: 700, responseMimeType: "application/json" },
+        }),
+      },
+    );
+
+    const payload = await geminiResponse.json().catch(() => ({}));
+    if (!geminiResponse.ok) {
+      const detail = payload?.error?.message;
+      response.status(geminiResponse.status === 429 ? 429 : 502).json({
+        error: detail || "No se pudo consultar Gemini. Inténtalo de nuevo.",
+      });
+      return;
+    }
+
+    const rawAnswer = payload?.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim();
+    if (!rawAnswer) {
+      response.status(502).json({ error: "Gemini devolvió una respuesta vacía." });
+      return;
+    }
+
+    let picks = [];
+    try {
+      const parsed = JSON.parse(rawAnswer.replace(/^```(?:json)?|```$/g, "").trim());
+      picks = Array.isArray(parsed?.citas) ? parsed.citas : [];
+    } catch {
+      picks = [];
+    }
+
+    // Una cita solo se acepta si existe literalmente dentro del párrafo del catálogo.
+    const flat = (value) => normalize(String(value)).replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+    const verified = [];
+    const used = new Set();
+    for (const pick of picks.slice(0, maxQuotes)) {
+      const source = sources[Number(pick?.pasaje) - 1];
+      const quote = typeof pick?.texto === "string" ? pick.texto.replace(/^[“"«\s]+|[”"»\s]+$/g, "") : "";
+      if (!source || quote.length < 15 || used.has(source) || !flat(source.text).includes(flat(quote))) continue;
+      used.add(source);
+      verified.push({ source, quote });
+    }
+
+    if (!verified.length) {
+      response.json({
+        answer: "No encontré una cita que responda eso con precisión en los mensajes disponibles.",
+        sources: [],
+      });
+      return;
+    }
+
+    const answer = verified
+      .map(({ source, quote }) => `“${quote}” [${source.code}, párrafo ${source.number}]`)
+      .join("\n\n");
+
+    response.json({
+      answer,
+      sources: verified.map(({ source: { id, code, title, number, text } }) => ({
+        id, code, title, number, text: text.slice(0, 360),
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.use((error, _request, response, _next) => {
+  console.error("Error en la API:", error);
+  if (response.headersSent) return;
+  response.status(500).json({ error: "Ocurrió un error al consultar el catálogo." });
+});
+
+if (process.env.NODE_ENV === "production") {
+  app.use(express.static(path.join(__dirname, "dist")));
+  app.get("*", (_request, response) => response.sendFile(path.join(__dirname, "dist", "index.html")));
+} else {
+  const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
+  app.use(vite.middlewares);
+}
+
+app.listen(port, () => {
+  console.log(`Mensajes web disponible en http://localhost:${port}`);
+});
