@@ -6,7 +6,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 let biblePromise;
 
 export function getBible() {
-  biblePromise ??= fs.readFile(path.join(here, "Resources", "biblia_rv1960.json"), "utf8").then((raw) => {
+  biblePromise ??= fs.readFile(path.join(here, "Resources", "biblia_rv2009.json"), "utf8").then((raw) => {
     const data = JSON.parse(raw);
     const verses = [];
     data.books.forEach((book, bookIndex) => book.chapters.forEach((chapter, chapterIndex) =>

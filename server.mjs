@@ -22,6 +22,9 @@ function getCatalog() {
       throw new Error("El catálogo no contiene una lista válida de mensajes.");
     }
     return catalog.sermons;
+  }).catch((error) => {
+    if (error.code === "ENOENT") return [];
+    throw error;
   });
   return catalogPromise;
 }
@@ -195,7 +198,7 @@ app.post("/api/bible/chat", async (request, response, next) => {
         `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(process.env.GEMINI_MODEL || "gemini-3.1-flash-lite")}:generateContent?key=${encodeURIComponent(apiKey)}`,
         { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(20_000),
           body: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: `Da de 6 a 10 palabras clave en español (sinónimos y formas bíblicas antiguas, como en la Reina-Valera 1960) para buscar versículos que respondan: "${question}". Responde solo las palabras separadas por espacios.` }] }],
+            contents: [{ role: "user", parts: [{ text: `Da de 6 a 10 palabras clave en español (sinónimos y formas bíblicas antiguas, como en la Reina-Valera 2009) para buscar versículos que respondan: "${question}". Responde solo las palabras separadas por espacios.` }] }],
             generationConfig: { temperature: 0, maxOutputTokens: 80 },
           }) },
       );
@@ -204,7 +207,7 @@ app.post("/api/bible/chat", async (request, response, next) => {
     } catch { /* se usa solo la pregunta */ }
     const candidates = searchVerses(bible, `${question} ${extra}`, 14);
     if (!candidates.length) {
-      response.json({ answer: "No encontré versículos que respondan eso en la Biblia (Reina-Valera 1960).", verses: [] });
+      response.json({ answer: "No encontré versículos que respondan eso en la Biblia (Reina-Valera 2009).", verses: [] });
       return;
     }
     const context = candidates.map((v, i) => `V${i + 1} (${v.book} ${v.chapter}:${v.verse}): ${v.text}`).join("\n");
@@ -217,7 +220,7 @@ app.post("/api/bible/chat", async (request, response, next) => {
         signal: AbortSignal.timeout(45_000),
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: [
-            "Eres un asistente de estudio bíblico. Respondes en español usando únicamente los versículos V1, V2… proporcionados (Reina-Valera 1960).",
+            "Eres un asistente de estudio bíblico. Respondes en español usando únicamente los versículos V1, V2… proporcionados (Reina-Valera 2009).",
             "Elige los 1 a 4 versículos que respondan directamente la pregunta y explica en una o dos oraciones cortas, basándote solo en ellos.",
             "No uses conocimiento externo ni cites versículos que no estén en la lista. No inventes texto bíblico.",
             'Devuelve JSON: {"versiculos":[números de V],"explicacion":"..."}.',
@@ -240,7 +243,7 @@ app.post("/api/bible/chat", async (request, response, next) => {
     const chosen = [...new Set((Array.isArray(parsed.versiculos) ? parsed.versiculos : []).map((x) => Number(String(x).replace(/\D/g, ""))))]
       .map((n) => candidates[n - 1]).filter(Boolean).slice(0, 4);
     if (!chosen.length) {
-      response.json({ answer: "No encontré versículos que respondan eso con precisión en la Biblia (Reina-Valera 1960).", verses: [] });
+      response.json({ answer: "No encontré versículos que respondan eso con precisión en la Biblia (Reina-Valera 2009).", verses: [] });
       return;
     }
     response.json({

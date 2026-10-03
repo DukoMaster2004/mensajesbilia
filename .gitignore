@@ -13,7 +13,7 @@ Resources/bro_branham_sermons_es.json
 Resources/Secrets.swift
 !Resources/bro_branham_sermons_es.json
 !Resources/branham_audio_catalog.json
-!Resources/biblia_rv1960.json
+!Resources/biblia_rv2009.json
 /public/
 
 .vercel

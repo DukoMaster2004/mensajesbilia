@@ -4,7 +4,7 @@ import { shareContent } from "./useStudyData.js";
 
 const newNote = () => ({ id: `m${Date.now()}`, title: "", text: "", quotes: [] });
 
-const qLabel = (q) => (q.bible ? `${q.title}:${q.number} (RV 1960)` : `${q.title} · ${q.code}, párrafo ${q.number}`);
+const qLabel = (q) => (q.bible ? `${q.title}:${q.number} (RV 2009)` : `${q.title} · ${q.code}, párrafo ${q.number}`);
 const bibleQuote = (v) => ({ id: "", code: `bible:${v.bookIndex}:${v.chapter}`, title: `${v.book} ${v.chapter}`, number: v.verse, text: v.text, bible: { book: v.bookIndex, chapter: v.chapter, verse: v.verse } });
 
 function noteToText(note) {

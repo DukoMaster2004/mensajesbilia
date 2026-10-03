@@ -23,7 +23,7 @@ function VerseList({ verses, onToast, onOpen }) {
       <button className="note-source" onClick={() => onOpen(v)}>{ref(v)}</button>
       <p>{v.text}</p>
       <div className="note-actions">
-        <button onClick={async () => onToast(await shareContent({ title: `${ref(v)} (RV 1960)`, text: `“${v.text}”` }))}><Icon name="share" size={14} /> Compartir</button>
+        <button onClick={async () => onToast(await shareContent({ title: `${ref(v)} (RV 2009)`, text: `“${v.text}”` }))}><Icon name="share" size={14} /> Compartir</button>
       </div>
     </div>
   ));
@@ -52,7 +52,7 @@ function BibleChat({ onToast, onOpen }) {
   return (
     <div className="bible-chat">
       <div className="bible-chat-scroll">
-        {chat.length === 0 && <p className="quote-hint">Pregunta sobre un tema o pasaje bíblico. Las respuestas muestran versículos reales de la Biblia (Reina-Valera 1960).</p>}
+        {chat.length === 0 && <p className="quote-hint">Pregunta sobre un tema o pasaje bíblico. Las respuestas muestran versículos reales de la Biblia (Reina-Valera 2009).</p>}
         {chat.map((m, i) => (
           <div className={`chat-message ${m.role}`} key={i}>
             <div className="bubble-wrap">
@@ -164,7 +164,7 @@ export function BibleView({ onToast, study, target }) {
 
   return (
     <section className="library-view bible-view" ref={topRef}>
-      <div className="welcome-row"><div><h1>Biblia</h1><p>Reina-Valera 1960 · completa, para leer y consultar.</p></div></div>
+      <div className="welcome-row"><div><h1>Biblia</h1><p>Reina-Valera 2009 · completa, para leer y consultar.</p></div></div>
       <div className="bible-tabs">
         <button className={tab === "read" ? "tool-btn on-tab" : "tool-btn"} onClick={() => { stopReading(); setTab("read"); }}><Icon name="book" size={15} /> Leer</button>
         <button className={tab === "ai" ? "tool-btn on-tab" : "tool-btn"} onClick={() => { stopReading(); setTab("ai"); }}><Icon name="spark" size={15} /> IA de la Biblia</button>
@@ -219,7 +219,7 @@ export function BibleView({ onToast, study, target }) {
                       <button className={fav ? "mini on" : "mini"} title="Favorito" aria-label="Favorito" onClick={() => { study.toggleFavorite(item); onToast(fav ? "Quitado de favoritos" : "Agregado a favoritos"); }}><Icon name="star" size={15} filled={fav} /></button>
                       <button className="mini" title="Agregar nota" aria-label="Agregar nota" onClick={() => setComposer(v.verse)}><Icon name="note" size={15} /></button>
                       <button className="mini" title="Compartir versículo" aria-label="Compartir versículo"
-                        onClick={async () => onToast(await shareContent({ title: `${title}:${v.verse} (RV 1960)`, text: `“${v.text}”` }))}><Icon name="share" size={15} /></button>
+                        onClick={async () => onToast(await shareContent({ title: `${title}:${v.verse} (RV 2009)`, text: `“${v.text}”` }))}><Icon name="share" size={15} /></button>
                     </div>
                     {notes.map((n) => <NoteItem key={n.id} note={n} study={study} onToast={onToast} />)}
                     {composer === v.verse && (
