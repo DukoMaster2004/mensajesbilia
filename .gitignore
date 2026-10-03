@@ -14,3 +14,5 @@ Resources/Secrets.swift
 !Resources/bro_branham_sermons_es.json
 !Resources/branham_audio_catalog.json
 /public/
+
+.vercel

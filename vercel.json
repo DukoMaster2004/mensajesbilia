@@ -2,8 +2,8 @@
   "buildCommand": "npm run build",
   "outputDirectory": "public",
   "functions": {
-    "server.mjs": {
-      "includeFiles": ["Resources/*.json"]
+    "api/[...path].mjs": {
+      "includeFiles": "Resources/*.json"
     }
   }
 }
