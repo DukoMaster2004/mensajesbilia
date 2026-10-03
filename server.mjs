@@ -34,6 +34,9 @@ function getAudioCatalog() {
       throw new Error("El catálogo de audio no contiene una lista válida de mensajes.");
     }
     return catalog;
+  }).catch((error) => {
+    if (error.code === "ENOENT") return [];
+    throw error;
   });
   return audioCatalogPromise;
 }
@@ -446,13 +449,17 @@ app.use((error, _request, response, _next) => {
 });
 
 if (process.env.NODE_ENV === "production") {
-  app.use(express.static(path.join(__dirname, "dist")));
-  app.get("*", (_request, response) => response.sendFile(path.join(__dirname, "dist", "index.html")));
+  app.use(express.static(path.join(__dirname, "public")));
+  app.get("*", (_request, response) => response.sendFile(path.join(__dirname, "public", "index.html")));
 } else {
   const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
   app.use(vite.middlewares);
 }
 
-app.listen(port, () => {
-  console.log(`Mensajes web disponible en http://localhost:${port}`);
-});
+export default app;
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  app.listen(port, () => {
+    console.log(`Mensajes web disponible en http://localhost:${port}`);
+  });
+}

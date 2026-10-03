@@ -11,3 +11,6 @@ Resources/*.json
 Resources/bro_branham_sermons_completo.json
 Resources/bro_branham_sermons_es.json
 Resources/Secrets.swift
+!Resources/bro_branham_sermons_es.json
+!Resources/branham_audio_catalog.json
+/public/
