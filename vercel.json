@@ -4,6 +4,15 @@
   "functions": {
     "api/[...path].mjs": {
       "includeFiles": "Resources/*.json"
+    },
+    "api/bible/[...path].mjs": {
+      "includeFiles": "Resources/*.json"
+    },
+    "api/bible/chapter/[book]/[chapter].mjs": {
+      "includeFiles": "Resources/*.json"
+    },
+    "api/sermons/[id].mjs": {
+      "includeFiles": "Resources/*.json"
     }
   }
 }
