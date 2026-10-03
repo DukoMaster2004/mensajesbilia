@@ -21,6 +21,10 @@ const sourceSearchCache = new Map();
 
 app.use(express.json({ limit: "64kb" }));
 
+function getGeminiApiKey() {
+  return process.env.GEMINI_API_KEY || process.env.GEMINI_BIBLE_API_KEY;
+}
+
 let catalogPromise;
 let audioCatalogPromise;
 function getCatalog() {
@@ -296,8 +300,8 @@ app.get("/api/bible/search", async (request, response, next) => {
 
 app.post("/api/bible/chat", async (request, response, next) => {
   try {
-    const apiKey = process.env.GEMINI_BIBLE_API_KEY || process.env.GEMINI_API_KEY;
-    if (!apiKey) { response.status(503).json({ error: "La IA de la Biblia aún no está configurada. Añade GEMINI_BIBLE_API_KEY al entorno del servidor." }); return; }
+    const apiKey = getGeminiApiKey();
+    if (!apiKey) { response.status(503).json({ error: "Configura GEMINI_API_KEY o GEMINI_BIBLE_API_KEY en el entorno del servidor." }); return; }
     const question = String(request.body?.question ?? "").trim().slice(0, 600);
     if (!question) { response.status(400).json({ error: "Escribe una pregunta antes de enviar." }); return; }
 
@@ -469,10 +473,10 @@ app.get("/api/sermons/:id", async (request, response, next) => {
 
 app.post("/api/chat", async (request, response, next) => {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = getGeminiApiKey();
     if (!apiKey) {
       response.status(503).json({
-        error: "El chat aún no está configurado. Añade GEMINI_API_KEY al entorno del servidor y reinícialo.",
+        error: "Configura GEMINI_API_KEY o GEMINI_BIBLE_API_KEY en el entorno del servidor.",
       });
       return;
     }
