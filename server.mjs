@@ -1,11 +1,13 @@
 import { getBible, searchVerses, verseRange, pickVerse, parseReference, strip } from "./bible.mjs";
-import "dotenv/config";
+import dotenv from "dotenv";
 import express from "express";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.join(__dirname, ".env.local") });
+dotenv.config({ path: path.join(__dirname, ".env") });
 const catalogPath = path.join(__dirname, "Resources", "bro_branham_sermons_es.json");
 const audioCatalogPath = path.join(__dirname, "Resources", "branham_audio_catalog.json");
 const sourceController = "https://tabernaculozoe.org/dove/controller/";
