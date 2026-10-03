@@ -282,7 +282,7 @@ function App() {
                       <strong>{sermon.title}</strong>
                       <span>{sermon.id}{sermon.date ? ` · ${sermon.date}` : ""}</span>
                     </span>
-                    <span className="message-location">{sermon.location || "Mensaje"}<small>{sermon.paragraphCount} párrafos</small></span>
+                    <span className="message-location">{sermon.location || "Mensaje"}<small>{sermon.paragraphCount ? `${sermon.paragraphCount} párrafos` : "Texto disponible"}</small></span>
                     <span className="row-arrow"><Icon name="right" size={17} /></span>
                   </button>
                 ))}

@@ -8,8 +8,14 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const catalogPath = path.join(__dirname, "Resources", "bro_branham_sermons_es.json");
 const audioCatalogPath = path.join(__dirname, "Resources", "branham_audio_catalog.json");
+const sourceController = "https://tabernaculozoe.org/dove/controller/";
 const port = Number(process.env.PORT || 5173);
 const app = express();
+let sourceCatalog;
+let sourceCatalogExpiresAt = 0;
+let sourceCatalogPromise;
+const sourceDetailCache = new Map();
+const sourceSearchCache = new Map();
 
 app.use(express.json({ limit: "64kb" }));
 
@@ -43,6 +49,108 @@ function getAudioCatalog() {
   return audioCatalogPromise;
 }
 
+async function postSource(endpoint, fields) {
+  const response = await fetch(new URL(endpoint, sourceController), {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+    body: new URLSearchParams(fields),
+    signal: AbortSignal.timeout(15_000),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.state !== 1 || !Array.isArray(payload.resultado)) {
+    throw new Error("No se pudo consultar el catálogo de mensajes remoto.");
+  }
+  return payload.resultado;
+}
+
+function mapSourceMetadata(record) {
+  const id = String(record?.MessageId ?? "").trim();
+  if (!id) return null;
+  const date = String(record.Date ?? "");
+  return {
+    id,
+    code: date || id,
+    title: String(record.Title ?? ""),
+    date,
+    location: String(record.Place ?? ""),
+    paragraphCount: null,
+  };
+}
+
+function getSourceCatalog() {
+  if (sourceCatalog && sourceCatalogExpiresAt > Date.now()) return Promise.resolve(sourceCatalog);
+  sourceCatalogPromise ??= postSource("list_by_date.php", {}).then((records) => {
+    sourceCatalog = records.map(mapSourceMetadata).filter(Boolean);
+    sourceCatalogExpiresAt = Date.now() + 5 * 60_000;
+    return sourceCatalog;
+  }).finally(() => {
+    sourceCatalogPromise = undefined;
+  });
+  return sourceCatalogPromise;
+}
+
+async function getAvailableCatalog() {
+  try {
+    return { sermons: await getSourceCatalog(), remote: true };
+  } catch (sourceError) {
+    const sermons = await getCatalog();
+    if (sermons.length) return { sermons, remote: false };
+    throw sourceError;
+  }
+}
+
+function mapSourceParagraph(record) {
+  const id = String(record.MessageId ?? "");
+  return {
+    id,
+    code: String(record.Date ?? "") || id,
+    title: String(record.Title ?? ""),
+    number: Number.parseInt(record.Number, 10),
+    text: String(record.Content ?? ""),
+  };
+}
+
+async function searchSourceParagraphs(query, limit = 8) {
+  const search = String(query ?? "").trim().slice(0, 200);
+  if (search.length < 2) return [];
+  const key = normalize(search);
+  let cached = sourceSearchCache.get(key);
+  if (!cached || cached.expiresAt <= Date.now()) {
+    cached = {
+      expiresAt: Date.now() + 5 * 60_000,
+      promise: postSource("search_message_1.php", { text: search })
+        .then((records) => records.map(mapSourceParagraph).filter((item) => item.id && item.text)),
+    };
+    sourceSearchCache.set(key, cached);
+    cached.promise.catch(() => {
+      if (sourceSearchCache.get(key) === cached) sourceSearchCache.delete(key);
+    });
+    if (sourceSearchCache.size > 50) sourceSearchCache.delete(sourceSearchCache.keys().next().value);
+  }
+  return (await cached.promise).slice(0, limit);
+}
+
+async function getSourceSermon(id, metadata = null) {
+  let pending = sourceDetailCache.get(id);
+  if (!pending) {
+    pending = postSource("show_message.php", { id }).then((records) => {
+      if (!records.length) return null;
+      const summary = mapSourceMetadata(records[0]) ?? { id };
+      const paragraphs = records.map((record) => ({
+        number: Number.parseInt(record.Number, 10),
+        text: String(record.Content ?? ""),
+      }));
+      return { ...summary, ...metadata, paragraphCount: paragraphs.length, paragraphs };
+    }).catch((error) => {
+      sourceDetailCache.delete(id);
+      throw error;
+    });
+    sourceDetailCache.set(id, pending);
+    if (sourceDetailCache.size > 25) sourceDetailCache.delete(sourceDetailCache.keys().next().value);
+  }
+  return pending;
+}
+
 async function getSpanishAudio(id) {
   const catalog = await getAudioCatalog();
   const matches = catalog.filter((entry) => entry.code === id && entry.audio);
@@ -55,10 +163,11 @@ async function getSpanishAudio(id) {
 function getSummary(sermon) {
   return {
     id: sermon.id,
+    code: sermon.code ?? sermon.date ?? sermon.id,
     title: sermon.title,
     date: sermon.date ?? sermon.meta?.date ?? "",
     location: sermon.location ?? sermon.meta?.location ?? "",
-    paragraphCount: sermon.paragraphs?.length ?? 0,
+    paragraphCount: sermon.paragraphCount ?? sermon.paragraphs?.length ?? 0,
   };
 }
 
@@ -255,21 +364,38 @@ app.post("/api/bible/chat", async (request, response, next) => {
 
 app.get("/api/sermons", async (request, response, next) => {
   try {
-    const sermons = await getCatalog();
+    const { sermons, remote } = await getAvailableCatalog();
     const search = normalize(request.query.search);
     const terms = searchTerms(search);
     const offset = Math.max(0, Number.parseInt(request.query.offset, 10) || 0);
     const limit = Math.min(100, Math.max(1, Number.parseInt(request.query.limit, 10) || 40));
-    const matches = search
-      ? sermons.filter((sermon) => {
+    let matches = sermons;
+    if (search && remote) {
+      const metadataMatches = sermons.filter((sermon) => {
+        const metadata = normalize(`${sermon.id} ${sermon.code} ${sermon.title} ${sermon.date} ${sermon.location}`);
+        return metadata.includes(search);
+      });
+      let paragraphMatches = [];
+      try {
+        paragraphMatches = await searchSourceParagraphs(search, Number.MAX_SAFE_INTEGER);
+      } catch (error) {
+        if (!metadataMatches.length) throw error;
+      }
+      const matchingIds = new Set([
+        ...metadataMatches.map((sermon) => sermon.id),
+        ...paragraphMatches.map((paragraph) => paragraph.id),
+      ]);
+      matches = sermons.filter((sermon) => matchingIds.has(sermon.id));
+    } else if (search) {
+      matches = sermons.filter((sermon) => {
           const metadata = normalize(`${sermon.id} ${sermon.title} ${sermon.date} ${sermon.location}`);
           return metadata.includes(search)
             || (sermon.paragraphs ?? []).some((paragraph) => {
               const text = normalize(paragraph.text);
               return text.includes(search) || (terms.length > 1 && terms.every((term) => text.includes(term)));
             });
-        })
-      : sermons;
+        });
+    }
     response.json({
       total: matches.length,
       sermons: matches.slice(offset, offset + limit).map(getSummary),
@@ -286,16 +412,26 @@ app.get("/api/passages", async (request, response, next) => {
       response.json({ passages: [] });
       return;
     }
-    const sermons = await getCatalog();
-    const pick = ({ id, title, number, text }) => ({ id, code: id, title, number, text });
+    const { sermons, remote } = await getAvailableCatalog();
+    const pick = ({ id, code, title, number, text }) => ({ id, code: code ?? id, title, number, text });
     const ref = q.match(/^(\d{2}-\d{4}[A-Za-z]?)\s*(?:[:,]|\s)\s*(?:p[áa]rrafo\s*)?(\d+)$/i);
+    if (remote && ref) {
+      const metadata = sermons.find((item) => item.code.toLowerCase() === ref[1].toLowerCase());
+      const sermon = metadata ? await getSourceSermon(metadata.id, metadata) : null;
+      const paragraph = sermon?.paragraphs.find((item) => item.number === Number(ref[2]));
+      response.json({ passages: paragraph ? [pick({ id: sermon.id, code: sermon.code, title: sermon.title, ...paragraph })] : [] });
+      return;
+    }
     if (ref) {
       const sermon = sermons.find((item) => item.id.toLowerCase() === ref[1].toLowerCase());
       const paragraph = sermon?.paragraphs?.find((item) => item.number === Number(ref[2]));
-      response.json({ passages: paragraph ? [pick({ id: sermon.id, title: sermon.title, ...paragraph })] : [] });
+      response.json({ passages: paragraph ? [pick({ id: sermon.id, code: sermon.code, title: sermon.title, ...paragraph })] : [] });
       return;
     }
-    response.json({ passages: searchParagraphs(sermons, q, 8).map(pick) });
+    const passages = remote
+      ? await searchSourceParagraphs(q, 8)
+      : searchParagraphs(sermons, q, 8);
+    response.json({ passages: passages.map(pick) });
   } catch (error) {
     next(error);
   }
@@ -303,15 +439,25 @@ app.get("/api/passages", async (request, response, next) => {
 
 app.get("/api/sermons/:id", async (request, response, next) => {
   try {
-    const sermons = await getCatalog();
-    const sermon = sermons.find((item) => item.id === request.params.id);
+    const { sermons, remote } = await getAvailableCatalog();
+    const metadata = sermons.find((item) => String(item.id) === request.params.id);
+    let sermon = metadata;
+    if (remote && metadata) {
+      try {
+        sermon = await getSourceSermon(metadata.id, metadata);
+      } catch (error) {
+        const localSermon = (await getCatalog()).find((item) => item.id === request.params.id);
+        if (!localSermon) throw error;
+        sermon = localSermon;
+      }
+    }
     if (!sermon) {
       response.status(404).json({ error: "No se encontró ese mensaje." });
       return;
     }
     response.json({
       ...getSummary(sermon),
-      audioUrl: await getSpanishAudio(sermon.id),
+      audioUrl: await getSpanishAudio(sermon.code ?? sermon.id),
       paragraphs: sermon.paragraphs ?? [],
     });
   } catch (error) {
@@ -337,8 +483,12 @@ app.post("/api/chat", async (request, response, next) => {
       return;
     }
 
-    const sermons = await getCatalog();
-    const sources = searchParagraphs(sermons, question, 5);
+    let sources;
+    try {
+      sources = await searchSourceParagraphs(question, 5);
+    } catch {
+      sources = searchParagraphs(await getCatalog(), question, 5);
+    }
     if (!sources.length) {
       response.json({
         answer: "No encontré evidencia suficiente sobre eso en los mensajes disponibles.",
