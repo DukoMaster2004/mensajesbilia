@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "predev": "lsof -ti tcp:5173 -ti tcp:24678 -sTCP:LISTEN | xargs kill -9 2>/dev/null; sleep 1; exit 0",
     "dev": "node server.mjs",
     "build": "vite build",
     "start": "NODE_ENV=production node server.mjs"
