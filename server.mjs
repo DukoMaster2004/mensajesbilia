@@ -51,7 +51,15 @@ async function supabaseRequest(path, options = {}) {
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) {
-    const error = new Error("No se pudo sincronizar la información compartida.");
+    const messages = {
+      400: "Supabase rechazó los datos enviados.",
+      401: "Supabase rechazó las credenciales del servidor.",
+      403: "Supabase no autorizó la operación; revisa los permisos de escritura de shared_page_state.",
+      404: "Supabase no encontró shared_page_state en el esquema expuesto.",
+      409: "Supabase detectó un conflicto al guardar el elemento.",
+      429: "Supabase limitó temporalmente las solicitudes.",
+    };
+    const error = new Error(`${messages[response.status] || "Supabase rechazó la sincronización."} (HTTP ${response.status}).`);
     error.status = 502;
     throw error;
   }

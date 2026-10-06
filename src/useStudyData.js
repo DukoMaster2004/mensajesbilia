@@ -37,6 +37,7 @@ export function useStudyData() {
   const dirty = useRef(new Map());
   const inFlight = useRef(new Set());
   const writeVersion = useRef(0);
+  const retryTimer = useRef(null);
 
   useEffect(() => {
     try { localStorage.setItem(KEY, JSON.stringify(data)); } catch { /* storage unavailable */ }
@@ -64,6 +65,10 @@ export function useStudyData() {
     }
 
     async function flush() {
+      if (retryTimer.current !== null) {
+        window.clearTimeout(retryTimer.current);
+        retryTimer.current = null;
+      }
       for (const [identity, change] of dirty.current) {
         if (inFlight.current.has(identity)) continue;
         inFlight.current.add(identity);
@@ -80,6 +85,12 @@ export function useStudyData() {
           setSyncError("");
         } catch (error) {
           setSyncError(error.message || "No se pudo guardar el cambio compartido.");
+          if (retryTimer.current === null) {
+            retryTimer.current = window.setTimeout(() => {
+              retryTimer.current = null;
+              flush();
+            }, 5000);
+          }
         } finally {
           inFlight.current.delete(identity);
         }
@@ -161,7 +172,11 @@ export function useStudyData() {
 
     synchronize();
     const interval = window.setInterval(synchronize, 5000);
-    return () => { cancelled = true; window.clearInterval(interval); };
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
+    };
   }, []);
 
   const toggleFavorite = useCallback((item) => {
