@@ -2,12 +2,22 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 
 const KEY = "branham-study";
 const empty = { favorites: [], notes: [], highlights: [], multiNotes: [] };
-const collections = ["favorites", "notes", "highlights", "multiNotes", "chat"];
+const collections = Object.keys(empty);
 
 function sharedItemKey(collection, item) {
-  return collection === "notes" || collection === "multiNotes"
-    ? item.id
-    : collection === "chat" ? "global" : item.key;
+  return collection === "notes" || collection === "multiNotes" ? item.id : item.key;
+}
+
+function mergeLocal(...sources) {
+  const maps = Object.fromEntries(collections.map((collection) => [collection, new Map()]));
+  for (const source of sources) {
+    for (const collection of collections) {
+      for (const item of Array.isArray(source?.[collection]) ? source[collection] : []) {
+        maps[collection].set(sharedItemKey(collection, item), item);
+      }
+    }
+  }
+  return Object.fromEntries(collections.map((collection) => [collection, [...maps[collection].values()]]));
 }
 
 function read(storageKey = KEY) {
@@ -30,17 +40,14 @@ export const itemKey = (id, number = 0) => `${id}:${number}`;
 export function useStudyData(accountId = "") {
   const storageKey = accountId ? `${KEY}:${accountId}` : `${KEY}:public`;
   const backupKey = `${storageKey}-local-backup`;
-  const migrationKey = `${storageKey}-migration-complete`;
   const [data, setData] = useState(() => read(storageKey));
   const [syncError, setSyncError] = useState("");
   const [ready, setReady] = useState(false);
   const initialData = useRef(data);
   const currentAccount = useRef(accountId);
-  const migrationData = useRef(data);
-  const migrationStarted = useRef(false);
+  const localBackup = useRef(empty);
   const baseline = useRef(null);
   const dirty = useRef(new Map());
-  const migrationChanges = useRef(new Set());
   const inFlight = useRef(new Set());
   const writeVersion = useRef(0);
   const retryTimer = useRef(null);
@@ -51,15 +58,12 @@ export function useStudyData(accountId = "") {
     currentAccount.current = accountId;
     const accountData = read(storageKey);
     initialData.current = accountData;
-    const accountBackup = read(backupKey);
-    migrationData.current = Object.values(accountBackup).some((items) => items.length) ? accountBackup : accountData;
+    localBackup.current = read(backupKey);
     setData(accountData);
     setReady(false);
     setSyncError("");
     baseline.current = null;
     dirty.current.clear();
-    migrationChanges.current.clear();
-    migrationStarted.current = false;
     writeVersion.current += 1;
   }, [accountId, backupKey, storageKey]);
 
@@ -112,7 +116,6 @@ export function useStudyData(accountId = "") {
             throw new Error(result?.error || `Vercel respondió HTTP ${response.status} al guardar. Revisa las variables de Supabase y la ruta de la API.`);
           }
           if (dirty.current.get(identity)?.signature === change.signature) dirty.current.delete(identity);
-          migrationChanges.current.delete(identity);
           writeVersion.current += 1;
           setSyncError("");
         } catch (error) {
@@ -127,14 +130,10 @@ export function useStudyData(accountId = "") {
           inFlight.current.delete(identity);
         }
       }
-      if (migrationStarted.current && migrationChanges.current.size === 0) {
-        try { localStorage.setItem(migrationKey, "true"); } catch { /* migration marker unavailable */ }
-        migrationStarted.current = false;
-      }
     }
 
     flush();
-  }, [data, ready, canEdit, accountId, migrationKey]);
+  }, [data, ready, canEdit, accountId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -158,24 +157,18 @@ export function useStudyData(accountId = "") {
 
         if (!initialized) {
           initialized = true;
-          const oldData = migrationData.current || initialData.current;
-          if (Object.values(oldData).some((items) => Array.isArray(items) && items.length)) {
-            try { localStorage.setItem(backupKey, JSON.stringify(oldData)); } catch { /* local backup unavailable */ }
+          const local = mergeLocal(localBackup.current, initialData.current);
+          if (collections.some((collection) => local[collection].length)) {
+            try { localStorage.setItem(backupKey, JSON.stringify(local)); } catch { /* local backup unavailable */ }
           }
-          const merged = { ...remote };
-          let migrationComplete = false;
-          try { migrationComplete = localStorage.getItem(migrationKey) === "true"; } catch { /* storage unavailable */ }
-          if (canEdit && !migrationComplete) {
-            migrationStarted.current = true;
-            for (const collection of collections) {
-              for (const item of Array.isArray(oldData[collection]) ? oldData[collection] : []) {
-                const key = sharedItemKey(collection, item);
-                if (remote[collection].some((remoteItem) => sharedItemKey(collection, remoteItem) === key)) continue;
-                const identity = `${accountId}\u0000${collection}\u0000${key}`;
-                dirty.current.set(identity, { accountId, collection, key, payload: item, signature: JSON.stringify(item) });
-                migrationChanges.current.add(identity);
-                merged[collection].push(item);
-              }
+          const deleted = new Set((result.deleted || []).map((entry) => `${entry.collection}\u0000${entry.item_key}`));
+          const merged = Object.fromEntries(collections.map((collection) => [collection, [...remote[collection]]]));
+          for (const collection of collections) {
+            for (const item of local[collection]) {
+              const key = sharedItemKey(collection, item);
+              if (deleted.has(`${collection}\u0000${key}`)) continue;
+              if (remote[collection].some((remoteItem) => sharedItemKey(collection, remoteItem) === key)) continue;
+              merged[collection].push(item);
             }
           }
           baseline.current = remote;
@@ -207,7 +200,7 @@ export function useStudyData(accountId = "") {
       window.clearInterval(interval);
       if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
     };
-  }, [canEdit, accountId, backupKey, migrationKey]);
+  }, [accountId, backupKey]);
 
   const toggleFavorite = useCallback((item) => {
     if (!canEdit) return;

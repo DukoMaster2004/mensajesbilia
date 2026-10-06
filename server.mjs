@@ -320,7 +320,12 @@ app.get("/api/shared-state", async (request, response) => {
       const previous = visibleEntries.get(identity);
       if (!previous || entry.owner_id !== "public") visibleEntries.set(identity, entry);
     }
-    response.json({ entries: [...visibleEntries.values()].filter((entry) => !entry.payload?._deleted) });
+    const visible = [...visibleEntries.values()];
+    response.json({
+      entries: visible.filter((entry) => !entry.payload?._deleted),
+      deleted: visible.filter((entry) => entry.payload?._deleted)
+        .map((entry) => ({ collection: entry.collection, item_key: entry.item_key })),
+    });
   } catch (error) {
     response.status(error.status || 500).json({ error: error.status ? error.message : "No se pudo cargar la información compartida." });
   }
