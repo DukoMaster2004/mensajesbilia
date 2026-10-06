@@ -195,6 +195,9 @@ app.get("/api/auth/google/callback", async (request, response) => {
       || Number(identity.exp) <= Math.floor(Date.now() / 1000) || ![true, "true"].includes(identity.email_verified) || !identity.sub || !identity.email) {
       throw new Error("Google no confirmó una cuenta verificada.");
     }
+    recordGoogleUser(identity).catch((error) => {
+      console.error("No se pudo registrar el usuario en Supabase:", error.message);
+    });
     const sessionToken = signSession({
       sub: identity.sub,
       email: identity.email,
@@ -257,6 +260,21 @@ async function supabaseRequest(path, options = {}) {
     throw error;
   }
   return response;
+}
+
+async function recordGoogleUser(identity) {
+  const query = new URLSearchParams({ on_conflict: "user_id" });
+  await supabaseRequest(`google_users?${query}`, {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify({
+      user_id: identity.sub,
+      email: identity.email,
+      name: identity.name || "",
+      picture: identity.picture || "",
+      last_login_at: new Date().toISOString(),
+    }),
+  });
 }
 
 function sharedCollection(value) {

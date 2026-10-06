@@ -30,7 +30,7 @@ Los mensajes y la Biblia son públicos. Cualquier persona puede iniciar sesión 
 
 Para activar cuentas de Google y sincronización:
 
-1. En Supabase, ejecuta [`supabase/shared_page_state.sql`](./supabase/shared_page_state.sql) en el SQL Editor. La actualización conserva las filas antiguas como datos públicos de solo lectura y agrega separación por cuenta.
+1. En Supabase, ejecuta [`supabase/shared_page_state.sql`](./supabase/shared_page_state.sql) y [`supabase/google_users.sql`](./supabase/google_users.sql) en el SQL Editor. La actualización conserva las filas antiguas como datos públicos de solo lectura y agrega separación por cuenta; `google_users` registra cada inicio de sesión (solo visible para el servidor y el panel de Supabase).
 2. En Google Cloud Console, configura la pantalla de consentimiento OAuth y crea un ID de cliente OAuth de tipo **Aplicación web**. Registra la URL de callback como URI de redirección autorizada. En local es `http://localhost:5173/api/auth/google/callback`; para producción usa `https://TU-DOMINIO/api/auth/google/callback`.
 3. En `.env.local` (local) y en Vercel **Settings → Environment Variables** (Production/Preview) configura `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` y `AUTH_SESSION_SECRET`. Genera este último con `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. En Vercel, `GOOGLE_REDIRECT_URI` debe ser exactamente la URL callback de producción.
 4. Reinicia el servidor local o despliega de nuevo en Vercel después de guardar las variables. La sesión usa una cookie `HttpOnly` de 12 horas. No publiques los secretos ni los pongas en el código del navegador.
