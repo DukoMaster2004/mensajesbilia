@@ -31,8 +31,8 @@ Los favoritos, notas, resaltados, notas múltiples y el chat se sincronizan entr
 Para activar la sincronización:
 
 1. Crea un proyecto en Supabase y ejecuta [`supabase/shared_page_state.sql`](./supabase/shared_page_state.sql) en el SQL Editor.
-2. Configura `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY` como variables de entorno del servidor (en `.env` o `.env.local` al desarrollar localmente) y del despliegue de Vercel. La clave `service_role` es secreta; nunca la pongas en el código del navegador.
-3. Despliega de nuevo. Las pestañas abiertas reciben actualizaciones periódicamente.
+2. En Vercel, abre **Project Settings → Environment Variables** y configura `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY` para los entornos **Production** y **Preview**. `.env.local` solo sirve para desarrollo local y no se copia al despliegue. La clave `service_role` es secreta; nunca la pongas en el código del navegador.
+3. Vuelve a desplegar el proyecto para que las funciones API reciban las variables. Las pestañas abiertas reciben actualizaciones periódicamente.
 
 Al conectarse correctamente por primera vez, los elementos guardados localmente que aún no existan en el estado compartido se publican automáticamente; los elementos ya compartidos tienen prioridad. Antes de migrar, los datos locales se conservan como copia en `localStorage` (`branham-study-local-backup` y `branham-chat-local-backup`). Mientras las variables no estén configuradas, la sincronización muestra un error y los cambios nuevos siguen guardándose localmente.
 

@@ -79,7 +79,9 @@ export function useStudyData() {
             body: change.payload === undefined ? undefined : JSON.stringify({ payload: change.payload }),
           });
           const result = change.payload === undefined ? null : await response.json().catch(() => null);
-          if (!response.ok) throw new Error(result?.error || "No se pudo guardar el cambio compartido.");
+          if (!response.ok) {
+            throw new Error(result?.error || `Vercel respondió HTTP ${response.status} al guardar. Revisa las variables de Supabase y la ruta de la API.`);
+          }
           if (dirty.current.get(identity)?.signature === change.signature) dirty.current.delete(identity);
           writeVersion.current += 1;
           setSyncError("");
