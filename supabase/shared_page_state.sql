@@ -1,10 +1,20 @@
 create table if not exists public.shared_page_state (
+  owner_id text not null default 'public',
   collection text not null,
   item_key text not null,
   payload jsonb not null,
   updated_at timestamptz not null default now(),
-  primary key (collection, item_key)
+  primary key (owner_id, collection, item_key)
 );
+
+alter table public.shared_page_state
+  add column if not exists owner_id text not null default 'public';
+
+alter table public.shared_page_state
+  drop constraint if exists shared_page_state_pkey;
+
+alter table public.shared_page_state
+  add constraint shared_page_state_pkey primary key (owner_id, collection, item_key);
 
 alter table public.shared_page_state enable row level security;
 

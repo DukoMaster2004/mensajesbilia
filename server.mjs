@@ -1,5 +1,5 @@
 import { getBible, searchVerses, verseRange, pickVerse, parseReference, strip } from "./bible.mjs";
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import dotenv from "dotenv";
 import express from "express";
 import { readFile } from "node:fs/promises";
@@ -27,56 +27,81 @@ function getGeminiApiKey() {
 }
 
 const sharedCollections = new Set(["favorites", "notes", "highlights", "multiNotes", "chat"]);
-const adminCookieName = "mensajes_admin_session";
-const adminSessionDuration = 12 * 60 * 60;
+const sessionCookieName = "mensajes_google_session";
+const oauthStateCookieName = "mensajes_google_oauth_state";
+const sessionDuration = 12 * 60 * 60;
 
-function getAdminConfig() {
-  const email = process.env.ADMIN_EMAIL?.trim().toLowerCase();
-  const password = process.env.ADMIN_PASSWORD;
-  const secret = process.env.ADMIN_SESSION_SECRET;
-  if (!email || !password || !secret || secret.length < 32) return null;
-  return { email, password, secret };
+function getGoogleConfig() {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI;
+  const secret = process.env.AUTH_SESSION_SECRET;
+  if (!clientId || !clientSecret || !redirectUri || !secret || secret.length < 32) return null;
+  return { clientId, clientSecret, redirectUri, secret };
 }
 
-function safeCompare(left, right) {
-  return timingSafeEqual(
-    createHash("sha256").update(left).digest(),
-    createHash("sha256").update(right).digest(),
-  );
+function getCookie(request, name) {
+  const cookie = request.headers.cookie?.split(";").map((part) => part.trim())
+    .find((part) => part.startsWith(`${name}=`));
+  if (!cookie) return "";
+  try {
+    return decodeURIComponent(cookie.slice(name.length + 1));
+  } catch {
+    return "";
+  }
 }
 
-function createAdminToken(email, secret) {
+function signSession(user, secret) {
   const payload = Buffer.from(JSON.stringify({
-    email,
-    expiresAt: Math.floor(Date.now() / 1000) + adminSessionDuration,
+    userId: user.sub,
+    email: user.email,
+    name: user.name || "",
+    picture: user.picture || "",
+    expiresAt: Math.floor(Date.now() / 1000) + sessionDuration,
   })).toString("base64url");
   const signature = createHmac("sha256", secret).update(payload).digest("base64url");
   return `${payload}.${signature}`;
 }
 
-function isAdminSession(request) {
-  const config = getAdminConfig();
-  if (!config) return false;
-  const cookie = request.headers.cookie?.split(";").map((part) => part.trim())
-    .find((part) => part.startsWith(`${adminCookieName}=`));
-  if (!cookie) return false;
-  let token;
-  try {
-    token = decodeURIComponent(cookie.slice(adminCookieName.length + 1));
-  } catch {
-    return false;
-  }
+function signOAuthState(state, secret) {
+  const payload = Buffer.from(JSON.stringify({
+    state,
+    expiresAt: Date.now() + 10 * 60_000,
+  })).toString("base64url");
+  const signature = createHmac("sha256", secret).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+}
+
+function verifyOAuthState(token, secret) {
   const separator = token.lastIndexOf(".");
-  if (separator < 1) return false;
+  if (separator < 1) return null;
+  const payload = token.slice(0, separator);
+  const signature = Buffer.from(token.slice(separator + 1), "base64url");
+  const expected = createHmac("sha256", secret).update(payload).digest();
+  if (signature.length !== expected.length || !timingSafeEqual(signature, expected)) return null;
+  try {
+    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    return claims.expiresAt > Date.now() ? claims : null;
+  } catch {
+    return null;
+  }
+}
+
+function getGoogleSession(request) {
+  const config = getGoogleConfig();
+  if (!config) return null;
+  const token = getCookie(request, sessionCookieName);
+  const separator = token.lastIndexOf(".");
+  if (separator < 1) return null;
   const payload = token.slice(0, separator);
   const signature = Buffer.from(token.slice(separator + 1), "base64url");
   const expected = createHmac("sha256", config.secret).update(payload).digest();
-  if (signature.length !== expected.length || !timingSafeEqual(signature, expected)) return false;
+  if (signature.length !== expected.length || !timingSafeEqual(signature, expected)) return null;
   try {
     const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return session.email === config.email && session.expiresAt > Math.floor(Date.now() / 1000);
+    return session.userId && session.expiresAt > Math.floor(Date.now() / 1000) ? session : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -92,45 +117,106 @@ function isSameOriginRequest(request) {
   }
 }
 
-app.get("/api/admin/session", (request, response) => {
+app.get("/api/auth/session", (request, response) => {
   response.setHeader("Cache-Control", "no-store");
+  const session = getGoogleSession(request);
   response.json({
-    configured: Boolean(getAdminConfig()),
-    authenticated: isAdminSession(request),
+    configured: Boolean(getGoogleConfig()),
+    authenticated: Boolean(session),
+    user: session ? {
+      userId: session.userId,
+      email: session.email,
+      name: session.name,
+      picture: session.picture,
+    } : null,
   });
 });
 
-app.post("/api/admin/login", (request, response) => {
+app.get("/api/auth/google", (request, response) => {
   response.setHeader("Cache-Control", "no-store");
-  if (!isSameOriginRequest(request)) {
-    response.status(403).json({ error: "La solicitud de inicio de sesión no es válida." });
-    return;
-  }
-  const config = getAdminConfig();
+  const config = getGoogleConfig();
   if (!config) {
-    response.status(503).json({ error: "El acceso de administración aún no está configurado en el servidor." });
+    response.redirect("/?auth_error=not_configured");
     return;
   }
-  const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "";
-  const password = typeof request.body?.password === "string" ? request.body.password : "";
-  if (!safeCompare(email, config.email) || !safeCompare(password, config.password)) {
-    response.status(401).json({ error: "El correo o la contraseña no son correctos." });
-    return;
-  }
-  const token = createAdminToken(config.email, config.secret);
+  const state = randomBytes(32).toString("base64url");
   const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
-  response.setHeader("Set-Cookie", `${adminCookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${adminSessionDuration}${secure}`);
-  response.json({ authenticated: true });
+  const signedState = signOAuthState(state, config.secret);
+  response.setHeader("Set-Cookie", `${oauthStateCookieName}=${encodeURIComponent(signedState)}; Path=/api/auth/google/callback; HttpOnly; SameSite=Lax; Max-Age=600${secure}`);
+  const authorizationUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+  authorizationUrl.search = new URLSearchParams({
+    client_id: config.clientId,
+    redirect_uri: config.redirectUri,
+    response_type: "code",
+    scope: "openid email profile",
+    state,
+    prompt: "select_account",
+  }).toString();
+  response.redirect(authorizationUrl.toString());
 });
 
-app.delete("/api/admin/session", (request, response) => {
+app.get("/api/auth/google/callback", async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  const config = getGoogleConfig();
+  const state = String(request.query.state || "");
+  const stateClaims = config ? verifyOAuthState(getCookie(request, oauthStateCookieName), config.secret) : null;
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  response.setHeader("Set-Cookie", `${oauthStateCookieName}=; Path=/api/auth/google/callback; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
+  if (!config || !state || !stateClaims || state !== stateClaims.state) {
+    response.redirect("/?auth_error=invalid_state");
+    return;
+  }
+  if (request.query.error || typeof request.query.code !== "string") {
+    response.redirect("/?auth_error=cancelled");
+    return;
+  }
+  try {
+    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code: request.query.code,
+        client_id: config.clientId,
+        client_secret: config.clientSecret,
+        redirect_uri: config.redirectUri,
+        grant_type: "authorization_code",
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!tokenResponse.ok) throw new Error("Google no aceptó el código de acceso.");
+    const tokens = await tokenResponse.json();
+    if (typeof tokens.id_token !== "string") throw new Error("Google no devolvió una identidad válida.");
+    const verifyResponse = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(tokens.id_token)}`, {
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!verifyResponse.ok) throw new Error("No se pudo verificar la cuenta de Google.");
+    const identity = await verifyResponse.json();
+    if (identity.aud !== config.clientId || !["accounts.google.com", "https://accounts.google.com"].includes(identity.iss)
+      || Number(identity.exp) <= Math.floor(Date.now() / 1000) || ![true, "true"].includes(identity.email_verified) || !identity.sub || !identity.email) {
+      throw new Error("Google no confirmó una cuenta verificada.");
+    }
+    const sessionToken = signSession({
+      sub: identity.sub,
+      email: identity.email,
+      name: identity.name,
+      picture: identity.picture,
+    }, config.secret);
+    response.append("Set-Cookie", `${sessionCookieName}=${encodeURIComponent(sessionToken)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${sessionDuration}${secure}`);
+    response.redirect("/?auth=success");
+  } catch (error) {
+    console.error("Falló la autenticación de Google:", error.message);
+    response.redirect("/?auth_error=google");
+  }
+});
+
+app.delete("/api/auth/session", (request, response) => {
   response.setHeader("Cache-Control", "no-store");
   if (!isSameOriginRequest(request)) {
     response.status(403).json({ error: "La solicitud de cierre de sesión no es válida." });
     return;
   }
   const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
-  response.setHeader("Set-Cookie", `${adminCookieName}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure}`);
+  response.setHeader("Set-Cookie", `${sessionCookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
   response.status(204).end();
 });
 
@@ -184,8 +270,10 @@ function sharedCollection(value) {
 
 app.get("/api/shared-state", async (request, response) => {
   try {
-    const query = new URLSearchParams({ select: "collection,item_key,payload", order: "collection.asc,item_key.asc" });
+    const query = new URLSearchParams({ select: "owner_id,collection,item_key,payload", order: "collection.asc,item_key.asc" });
     if (request.query.collection) query.set("collection", `eq.${sharedCollection(String(request.query.collection))}`);
+    const session = getGoogleSession(request);
+    query.set("owner_id", session ? `in.(public,${session.userId})` : "eq.public");
     const entries = [];
     let offset = 0;
     while (true) {
@@ -208,7 +296,13 @@ app.get("/api/shared-state", async (request, response) => {
         || (!Number.isFinite(total) && batch.length < 1000)) break;
       offset += batch.length;
     }
-    response.json({ entries });
+    const visibleEntries = new Map();
+    for (const entry of entries) {
+      const identity = `${entry.collection}\u0000${entry.item_key}`;
+      const previous = visibleEntries.get(identity);
+      if (!previous || entry.owner_id !== "public") visibleEntries.set(identity, entry);
+    }
+    response.json({ entries: [...visibleEntries.values()].filter((entry) => !entry.payload?._deleted) });
   } catch (error) {
     response.status(error.status || 500).json({ error: error.status ? error.message : "No se pudo cargar la información compartida." });
   }
@@ -219,8 +313,13 @@ app.put("/api/shared-state/:collection/:key", async (request, response) => {
     response.status(403).json({ error: "La solicitud de guardado no es válida." });
     return;
   }
-  if (!isAdminSession(request)) {
-    response.status(401).json({ error: "Inicia sesión como administrador para guardar cambios." });
+  const session = getGoogleSession(request);
+  if (!session) {
+    response.status(401).json({ error: "Inicia sesión con Google para guardar tus cambios." });
+    return;
+  }
+  if (request.get("x-account-id") !== session.userId) {
+    response.status(403).json({ error: "La cuenta activa cambió; recarga tus datos antes de guardar." });
     return;
   }
   try {
@@ -252,11 +351,11 @@ app.put("/api/shared-state/:collection/:key", async (request, response) => {
         return;
       }
     }
-    const query = new URLSearchParams({ on_conflict: "collection,item_key" });
+    const query = new URLSearchParams({ on_conflict: "owner_id,collection,item_key" });
     await supabaseRequest(`shared_page_state?${query}`, {
       method: "POST",
       headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-      body: JSON.stringify({ collection, item_key: itemKey, payload }),
+      body: JSON.stringify({ owner_id: session.userId, collection, item_key: itemKey, payload }),
     });
     response.status(204).end();
   } catch (error) {
@@ -269,8 +368,13 @@ app.delete("/api/shared-state/:collection/:key", async (request, response) => {
     response.status(403).json({ error: "La solicitud de eliminación no es válida." });
     return;
   }
-  if (!isAdminSession(request)) {
-    response.status(401).json({ error: "Inicia sesión como administrador para eliminar cambios." });
+  const session = getGoogleSession(request);
+  if (!session) {
+    response.status(401).json({ error: "Inicia sesión con Google para eliminar tus cambios." });
+    return;
+  }
+  if (request.get("x-account-id") !== session.userId) {
+    response.status(403).json({ error: "La cuenta activa cambió; recarga tus datos antes de eliminar." });
     return;
   }
   try {
@@ -280,8 +384,17 @@ app.delete("/api/shared-state/:collection/:key", async (request, response) => {
       response.status(400).json({ error: "La clave del elemento no es válida." });
       return;
     }
-    const query = new URLSearchParams({ collection: `eq.${collection}`, item_key: `eq.${itemKey}` });
-    await supabaseRequest(`shared_page_state?${query}`, { method: "DELETE", headers: { Prefer: "return=minimal" } });
+    const query = new URLSearchParams({ on_conflict: "owner_id,collection,item_key" });
+    await supabaseRequest(`shared_page_state?${query}`, {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({
+        owner_id: session.userId,
+        collection,
+        item_key: itemKey,
+        payload: { _deleted: true },
+      }),
+    });
     response.status(204).end();
   } catch (error) {
     response.status(error.status || 500).json({ error: error.status ? error.message : "No se pudo eliminar la información compartida." });

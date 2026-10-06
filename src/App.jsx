@@ -21,7 +21,7 @@ async function api(path, options) {
   return data;
 }
 
-function readSavedChat(key = "branham-chat") {
+function readSavedChat(key = "branham-chat:public") {
   try {
     const saved = JSON.parse(localStorage.getItem(key) || "[]");
     return saved.length ? saved : initialChat;
@@ -41,12 +41,7 @@ function readPreference(key, fallback, choices) {
 
 function App() {
   const [section, setSection] = useState("library");
-  const [adminSession, setAdminSession] = useState({ configured: false, authenticated: false, loading: true });
-  const [loginOpen, setLoginOpen] = useState(false);
-  const [loginEmail, setLoginEmail] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
-  const [loginError, setLoginError] = useState("");
-  const [loginBusy, setLoginBusy] = useState(false);
+  const [authSession, setAuthSession] = useState({ configured: false, authenticated: false, user: null, loading: true });
   const [theme, setTheme] = useState(() => readPreference("branham-theme", "light", ["light", "dark"]));
   const [textSize, setTextSize] = useState(() => readPreference("branham-text-size", "medium", ["small", "medium", "large"]));
   const [query, setQuery] = useState("");
@@ -64,7 +59,9 @@ function App() {
   const [chatError, setChatError] = useState("");
   const [sending, setSending] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const study = useStudyData(adminSession.authenticated);
+  const accountId = authSession.user?.userId || "";
+  const chatStorageKey = accountId ? `branham-chat:${accountId}` : "branham-chat:public";
+  const study = useStudyData(accountId);
   const [bibleTarget, setBibleTarget] = useState(null);
   const [toast, setToast] = useState("");
   const showToast = useCallback((text) => {
@@ -81,18 +78,28 @@ function App() {
   const chatWriteVersionRef = useRef(0);
   const chatWriteQueue = useRef(Promise.resolve());
   const chatLatestRef = useRef(chat);
-  const adminAuthenticatedRef = useRef(adminSession.authenticated);
-  adminAuthenticatedRef.current = adminSession.authenticated;
+  const accountIdRef = useRef(accountId);
+  accountIdRef.current = accountId;
 
   useEffect(() => {
     let cancelled = false;
-    api("/api/admin/session")
+    const query = new URLSearchParams(window.location.search);
+    const authOutcome = query.get("auth");
+    const authError = query.get("auth_error");
+    if (authOutcome || authError) {
+      window.history.replaceState({}, "", window.location.pathname);
+      if (authOutcome === "success") showToast("Sesión de Google iniciada");
+      if (authError === "not_configured") showToast("El inicio de sesión de Google aún no está configurado.");
+      if (authError === "cancelled") showToast("Se canceló el inicio de sesión.");
+      if (authError === "google" || authError === "invalid_state") showToast("No se pudo verificar la cuenta de Google. Inténtalo de nuevo.");
+    }
+    api("/api/auth/session")
       .then((session) => {
-        if (!cancelled) setAdminSession({ ...session, loading: false });
+        if (!cancelled) setAuthSession({ ...session, loading: false });
       })
       .catch((error) => {
         if (!cancelled) {
-          setAdminSession({ configured: false, authenticated: false, loading: false });
+          setAuthSession({ configured: false, authenticated: false, user: null, loading: false });
           showToast(error.message);
         }
       });
@@ -101,38 +108,21 @@ function App() {
 
   useEffect(() => {
     const handleExpired = () => {
-      setAdminSession((session) => ({ ...session, authenticated: false }));
-      showToast("La sesión terminó. Inicia sesión de nuevo para guardar cambios.");
+      setAuthSession((session) => ({ ...session, authenticated: false, user: null }));
+      showToast("La sesión terminó. Vuelve a entrar con Google para guardar tus cambios.");
     };
-    window.addEventListener("admin-session-expired", handleExpired);
-    return () => window.removeEventListener("admin-session-expired", handleExpired);
+    window.addEventListener("google-session-expired", handleExpired);
+    return () => window.removeEventListener("google-session-expired", handleExpired);
   }, [showToast]);
 
-  async function signIn(event) {
-    event.preventDefault();
-    setLoginBusy(true);
-    setLoginError("");
-    try {
-      await api("/api/admin/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
-      });
-      setAdminSession((session) => ({ ...session, configured: true, authenticated: true, loading: false }));
-      setLoginOpen(false);
-      setLoginPassword("");
-      showToast("Sesión de administrador iniciada");
-    } catch (error) {
-      setLoginError(error.message);
-    } finally {
-      setLoginBusy(false);
-    }
+  function signIn() {
+    window.location.assign("/api/auth/google");
   }
 
   async function signOut() {
     try {
-      await api("/api/admin/session", { method: "DELETE" });
-      setAdminSession((session) => ({ ...session, authenticated: false }));
+      await api("/api/auth/session", { method: "DELETE" });
+      setAuthSession((session) => ({ ...session, authenticated: false, user: null }));
       showToast("Sesión cerrada");
     } catch (error) {
       showToast(error.message);
@@ -140,14 +130,15 @@ function App() {
   }
 
   const enqueueChatSave = useCallback((messages) => {
-    if (!adminAuthenticatedRef.current) return;
+    const ownerId = accountIdRef.current;
+    if (!ownerId) return;
     const snapshot = JSON.stringify(messages);
     chatPendingRef.current += 1;
     chatWriteQueue.current = chatWriteQueue.current.then(async () => {
       try {
         await api("/api/shared-state/chat/global", {
           method: "PUT",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "X-Account-Id": ownerId },
           body: JSON.stringify({ payload: messages }),
         });
         chatSnapshotRef.current = snapshot;
@@ -155,11 +146,11 @@ function App() {
         setChatSyncError("");
       } catch (error) {
         setChatSyncError(error.message);
-        if (error.message.includes("sesión") || error.message.includes("HTTP 401")) {
-          window.dispatchEvent(new Event("admin-session-expired"));
+        if (error.message.includes("Google") || error.message.includes("HTTP 401")) {
+          window.dispatchEvent(new Event("google-session-expired"));
         }
         window.setTimeout(() => {
-          if (adminAuthenticatedRef.current && chatReadyRef.current
+          if (accountIdRef.current === ownerId && chatReadyRef.current
             && chatSnapshotRef.current !== snapshot && JSON.stringify(chatLatestRef.current) === snapshot) {
             enqueueChatSave(chatLatestRef.current);
           }
@@ -173,6 +164,10 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     let initialized = false;
+    chatReadyRef.current = false;
+    chatSnapshotRef.current = "";
+    setChat(readSavedChat(chatStorageKey));
+    setChatSyncError("");
     async function synchronizeChat() {
       const versionAtRequest = chatWriteVersionRef.current;
       try {
@@ -184,23 +179,12 @@ function App() {
         const snapshot = JSON.stringify(remote);
         if (!initialized) {
           initialized = true;
-          const localChat = readSavedChat();
-          if (localChat.length > 1) {
-            try {
-              if (!localStorage.getItem("branham-chat-local-backup")) {
-                localStorage.setItem("branham-chat-local-backup", JSON.stringify(localChat));
-              }
-            } catch { /* local backup unavailable */ }
-          }
+          const localChat = readSavedChat(chatStorageKey);
           chatSnapshotRef.current = snapshot;
           chatReadyRef.current = true;
-          if (adminSession.authenticated && !remoteEntry) {
-            const oldChat = readSavedChat("branham-chat-local-backup");
-            const migrationChat = oldChat.length > 1 ? oldChat : localChat;
-            if (migrationChat.length > 1) {
-              setChat(migrationChat);
-              enqueueChatSave(migrationChat);
-            } else setChat(remote);
+          if (accountId && remoteEntry?.owner_id !== accountId && localChat.length > 1) {
+            setChat(localChat);
+            enqueueChatSave(localChat);
           } else setChat(remote);
         } else if (!chatPendingRef.current && snapshot !== chatSnapshotRef.current) {
           chatSnapshotRef.current = snapshot;
@@ -212,9 +196,12 @@ function App() {
       }
     }
     synchronizeChat();
-    const interval = window.setInterval(synchronizeChat, 5000);
-    return () => { cancelled = true; window.clearInterval(interval); };
-  }, [adminSession.authenticated, enqueueChatSave]);
+    const interval = accountId ? window.setInterval(synchronizeChat, 5000) : null;
+    return () => {
+      cancelled = true;
+      if (interval !== null) window.clearInterval(interval);
+    };
+  }, [accountId, chatStorageKey, enqueueChatSave]);
 
   const loadMessages = useCallback(async (search = "", offset = 0, append = false) => {
     setLoadingList(true);
@@ -241,13 +228,13 @@ function App() {
 
   useEffect(() => {
     chatLatestRef.current = chat;
-    try { localStorage.setItem("branham-chat", JSON.stringify(chat)); } catch { /* local backup unavailable */ }
+    try { localStorage.setItem(chatStorageKey, JSON.stringify(chat)); } catch { /* local backup unavailable */ }
     chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-    if (!adminSession.authenticated || !chatReadyRef.current) return;
+    if (!accountId || !chatReadyRef.current) return;
     const snapshot = JSON.stringify(chat);
     if (snapshot === chatSnapshotRef.current) return;
     enqueueChatSave(chat);
-  }, [chat, enqueueChatSave, adminSession.authenticated]);
+  }, [chat, enqueueChatSave, accountId, chatStorageKey]);
 
   useEffect(() => {
     if (study.syncError) showToast(study.syncError);
@@ -325,7 +312,7 @@ function App() {
   function clearChat() {
     setChat(initialChat);
     setChatError("");
-    localStorage.removeItem("branham-chat");
+    localStorage.removeItem(chatStorageKey);
   }
 
   function navigate(next) {
@@ -388,14 +375,15 @@ function App() {
           </button>
           <div className="breadcrumbs"><span>Biblioteca</span><Icon name="right" size={14} /><strong>{section === "chat" ? "Chat con IA" : section === "settings" ? "Configuración" : section === "favorites" ? "Favoritos" : section === "notes" ? "Notas" : section === "highlights" ? "Resaltados" : section === "multinotes" ? "Nota múltiple" : section === "bible" ? "Biblia" : selectedMessage?.title || "Mensajes"}</strong></div>
           <div className="topbar-meta"><span className="status-dot" /> Catálogo disponible</div>
-          <button className="session-button" disabled={adminSession.loading}
-            onClick={() => adminSession.authenticated ? signOut() : setLoginOpen(true)}>
-            {adminSession.authenticated ? "Cerrar sesión" : adminSession.loading ? "Verificando…" : "Iniciar sesión"}
+          <button className="session-button" disabled={authSession.loading}
+            title={authSession.user?.email ? `Cuenta Google: ${authSession.user.email}` : "Inicia sesión con una cuenta de Google"}
+            onClick={() => authSession.authenticated ? signOut() : signIn()}>
+            {authSession.authenticated ? "Cerrar sesión" : authSession.loading ? "Verificando…" : "Continuar con Google"}
           </button>
         </header>
 
         <aside className="shared-data-notice" role="note">
-          Todos pueden leer la biblioteca compartida. Solo el administrador puede guardar o editar favoritos, notas, notas múltiples, resaltados y la conversación pública.
+          La lectura es pública. Al iniciar sesión con Google puedes guardar y editar tus propios favoritos, notas, resaltados y conversaciones; solo tu cuenta los puede cambiar.
         </aside>
 
         {section === "library" && (
@@ -407,7 +395,7 @@ function App() {
               onRetry={() => openMessage(selectedId)}
               jumpTo={selectedParagraph}
               study={study}
-              canEdit={adminSession.authenticated}
+              canEdit={study.canEdit}
               onToast={showToast}
               onBack={() => { setSelectedId(""); setSelectedMessage(null); }}
               onAsk={(text) => {
@@ -472,7 +460,7 @@ function App() {
         {section === "chat" && (
           <ChatView
             chat={chat}
-            canEdit={adminSession.authenticated}
+            canEdit={study.canEdit}
             draft={draft}
             setDraft={setDraft}
             sendMessage={sendMessage}
@@ -496,12 +484,12 @@ function App() {
           />
         )}
         {["favorites", "notes", "highlights"].includes(section) && (
-          <StudyListView kind={section} study={study} canEdit={adminSession.authenticated} onToast={showToast}
+          <StudyListView kind={section} study={study} canEdit={study.canEdit} onToast={showToast}
             onOpen={(id, n) => { if (id && typeof id === "object") { setBibleTarget({ ...id, nonce: Date.now() }); setSection("bible"); } else { setSection("library"); openMessage(id, n); } }} />
         )}
-        {section === "bible" && <BibleView onToast={showToast} study={study} target={bibleTarget} canEdit={adminSession.authenticated} />}
+        {section === "bible" && <BibleView onToast={showToast} study={study} target={bibleTarget} canEdit={study.canEdit} />}
         {section === "multinotes" && (
-          <MultiNotesView study={study} canEdit={adminSession.authenticated} onToast={showToast}
+          <MultiNotesView study={study} canEdit={study.canEdit} onToast={showToast}
             onOpen={(id, n) => { setSection("library"); openMessage(id, n); }} />
         )}
         {section === "settings" && (
@@ -513,27 +501,6 @@ function App() {
           />
         )}
       </main>
-      {loginOpen && (
-        <div className="admin-modal-backdrop" role="presentation" onMouseDown={(event) => {
-          if (event.target === event.currentTarget) setLoginOpen(false);
-        }}>
-          <section className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-login-title">
-            <button className="admin-modal-close" onClick={() => { setLoginOpen(false); setLoginError(""); }} aria-label="Cerrar">×</button>
-            <p className="eyebrow">ADMINISTRACIÓN</p>
-            <h2 id="admin-login-title">Iniciar sesión</h2>
-            {adminSession.configured ? (
-              <form onSubmit={signIn}>
-                <label>Correo<input autoComplete="username" type="email" value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} required /></label>
-                <label>Contraseña<input autoComplete="current-password" type="password" value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} required /></label>
-                {loginError && <p className="admin-login-error" role="alert">{loginError}</p>}
-                <button className="ask-cta" type="submit" disabled={loginBusy}>{loginBusy ? "Ingresando…" : "Ingresar"}</button>
-              </form>
-            ) : (
-              <p className="admin-setup-hint">El propietario debe configurar <code>ADMIN_EMAIL</code>, <code>ADMIN_PASSWORD</code> y <code>ADMIN_SESSION_SECRET</code> en las variables privadas del servidor y volver a desplegar.</p>
-            )}
-          </section>
-        </div>
-      )}
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );

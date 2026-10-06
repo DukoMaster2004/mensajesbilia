@@ -26,15 +26,16 @@ El catálogo se sirve de forma paginada y los textos completos se cargan por men
 
 En cada mensaje puedes compartir, marcar favoritos, resaltar (4 colores, incluso fragmentos elegidos manualmente) y añadir notas por párrafo o por mensaje. Las secciones **Favoritos**, **Notas** y **Resaltados** reúnen estos elementos.
 
-Los favoritos, notas, resaltados, notas múltiples y la conversación del administrador se muestran públicamente en modo lectura. Solo el administrador puede modificarlos después de iniciar sesión; el chat que escriben los visitantes no se publica. El tema y el tamaño del texto siguen siendo preferencias locales del navegador.
+Los mensajes y la Biblia son públicos. Cualquier persona puede iniciar sesión con Google para guardar sus propios favoritos, notas, notas múltiples, resaltados y conversación. Cada cuenta solo puede leer y modificar sus propios datos; los datos antiguos compartidos siguen visibles como lectura pública. El tema y el tamaño del texto se guardan localmente.
 
-Para activar la sincronización:
+Para activar cuentas de Google y sincronización:
 
-1. Crea un proyecto en Supabase y ejecuta [`supabase/shared_page_state.sql`](./supabase/shared_page_state.sql) en el SQL Editor.
-2. Para desarrollo local, añade esas variables a `.env.local`. En Vercel, abre **Project Settings → Environment Variables** y configura `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` y `ADMIN_SESSION_SECRET` para **Production** (y **Preview**, si lo usas). Crea una contraseña larga y única para el administrador, y genera un secreto aleatorio de al menos 32 caracteres para `ADMIN_SESSION_SECRET`. `.env.local` solo sirve localmente y no se copia al despliegue. Nunca publiques estos valores ni la clave `service_role`.
-3. Vuelve a desplegar para que las funciones API reciban las variables. Después podrás iniciar sesión desde el botón de la página. La sesión usa una cookie `HttpOnly`, dura 12 horas y el servidor exige autenticación para cada escritura; las lecturas siguen siendo públicas.
+1. En Supabase, ejecuta [`supabase/shared_page_state.sql`](./supabase/shared_page_state.sql) en el SQL Editor. La actualización conserva las filas antiguas como datos públicos de solo lectura y agrega separación por cuenta.
+2. En Google Cloud Console, configura la pantalla de consentimiento OAuth y crea un ID de cliente OAuth de tipo **Aplicación web**. Registra la URL de callback como URI de redirección autorizada. En local es `http://localhost:5173/api/auth/google/callback`; para producción usa `https://TU-DOMINIO/api/auth/google/callback`.
+3. En `.env.local` (local) y en Vercel **Settings → Environment Variables** (Production/Preview) configura `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` y `AUTH_SESSION_SECRET`. Genera este último con `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. En Vercel, `GOOGLE_REDIRECT_URI` debe ser exactamente la URL callback de producción.
+4. Reinicia el servidor local o despliega de nuevo en Vercel después de guardar las variables. La sesión usa una cookie `HttpOnly` de 12 horas. No publiques los secretos ni los pongas en el código del navegador.
 
-Al iniciar sesión por primera vez, los elementos que estaban guardados localmente y aún no existen en el estado compartido se publican; los elementos ya compartidos tienen prioridad. Antes de migrar, los datos locales se conservan como copia en `localStorage` (`branham-study-local-backup` y `branham-chat-local-backup`).
+Los datos guardados anteriormente en Supabase permanecen visibles públicamente, pero las nuevas modificaciones quedan en el espacio de la cuenta que inició sesión. Las copias locales se separan por cuenta en `localStorage`.
 
 ## Biblia
 

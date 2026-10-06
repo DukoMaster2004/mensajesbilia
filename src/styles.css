@@ -398,29 +398,16 @@ h1, h2 { font-family: "Manrope", sans-serif; }
 .shared-data-notice { margin: 8px 24px 0; padding: 8px 11px; border: 1px solid #eadca8; border-radius: 6px; background: #fff9e6; color: #66551f; font: 500 11px/1.5 "Manrope", sans-serif; }
 .session-button { margin-left: 16px; padding: 7px 11px; border: 1px solid #d9dfd9; border-radius: 7px; background: #fff; color: var(--green-dark); font: 600 11px "Manrope", sans-serif; cursor: pointer; white-space: nowrap; }
 .session-button:disabled { opacity: .6; cursor: wait; }
-.admin-modal-backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 18px; background: rgba(20, 27, 22, .48); }
-.admin-modal { position: relative; width: min(100%, 390px); padding: 28px; border: 1px solid var(--line); border-radius: 13px; background: #fff; box-shadow: 0 18px 55px rgba(0,0,0,.2); }
-.admin-modal h2 { margin: 0 0 20px; font-size: 23px; }
-.admin-modal form { display: grid; gap: 14px; }
-.admin-modal form label { display: grid; gap: 6px; color: #606960; font-size: 12px; font-weight: 600; }
-.admin-modal input { width: 100%; padding: 10px 11px; border: 1px solid #d9ded8; border-radius: 7px; background: #fff; color: #252b29; }
-.admin-modal form .ask-cta { margin-top: 4px; }
-.admin-modal-close { position: absolute; top: 12px; right: 13px; width: 30px; height: 30px; border: 0; border-radius: 50%; background: transparent; color: #737974; font-size: 24px; cursor: pointer; }
-.admin-login-error { margin: 0; color: #a1483f; font-size: 12px; }
-.admin-setup-hint { margin: 0; color: #737974; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
-.admin-setup-hint code { padding: 2px 4px; border-radius: 3px; background: #f1f3ef; font-size: 11px; }
 .app-shell[data-theme="dark"] .reader-toolbar { background: #151a16; border-color: #2c352e; }
 .app-shell[data-theme="dark"] .shared-data-notice { border-color: #554a2c; background: #302b1d; color: #e2d39e; }
-.app-shell[data-theme="dark"] .session-button, .app-shell[data-theme="dark"] .admin-modal { background: #1d241f; border-color: #2f3a31; color: #d4ddd5; }
-.app-shell[data-theme="dark"] .admin-modal input { background: #151a16; border-color: #39433c; color: #d4ddd5; }
-.app-shell[data-theme="dark"] .admin-setup-hint code { background: #29332c; }
+.app-shell[data-theme="dark"] .session-button { background: #1d241f; border-color: #2f3a31; color: #d4ddd5; }
 .app-shell[data-theme="dark"] .tool-btn, .app-shell[data-theme="dark"] .ghost-button, .app-shell[data-theme="dark"] .study-item, .app-shell[data-theme="dark"] .note-composer textarea { background: #1d241f; border-color: #2f3a31; color: #d4ddd5; }
 .app-shell[data-theme="dark"] .study-item p, .app-shell[data-theme="dark"] .note-actions button, .app-shell[data-theme="dark"] .mini { color: #aab5ac; }
 .app-shell[data-theme="dark"] .note-item { background: #2b2714; color: #e6e0c4; }
 .app-shell[data-theme="dark"] .note-source { color: #9fcea6; }
 .app-shell[data-theme="dark"] .hl-yellow { background: rgba(246,216,96,.2); } .app-shell[data-theme="dark"] .hl-green { background: rgba(143,212,154,.2); } .app-shell[data-theme="dark"] .hl-blue { background: rgba(140,195,242,.2); } .app-shell[data-theme="dark"] .hl-pink { background: rgba(242,162,192,.2); }
 @media (max-width: 680px) { .tool-btn span { display: none; } }
-@media (max-width: 680px) { .topbar { padding: 0 14px; } .topbar-meta { display: none; } .session-button { margin-left: auto; } .admin-modal { padding: 25px 20px; } }
+@media (max-width: 680px) { .topbar { padding: 0 14px; } .topbar-meta { display: none; } .session-button { margin-left: auto; } }
 .chat-actions { margin: 6px 0 0 4px; }
 
 /* Nota múltiple */

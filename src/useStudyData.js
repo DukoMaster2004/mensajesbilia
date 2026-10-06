@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 const KEY = "branham-study";
 const empty = { favorites: [], notes: [], highlights: [], multiNotes: [] };
@@ -10,9 +10,9 @@ function sharedItemKey(collection, item) {
     : collection === "chat" ? "global" : item.key;
 }
 
-function read() {
+function read(storageKey = KEY) {
   try {
-    const data = JSON.parse(localStorage.getItem(KEY) || "{}");
+    const data = JSON.parse(localStorage.getItem(storageKey) || "{}");
     return {
       favorites: Array.isArray(data.favorites) ? data.favorites : [],
       notes: Array.isArray(data.notes) ? data.notes : [],
@@ -27,12 +27,16 @@ function read() {
 export const HIGHLIGHT_COLORS = ["yellow", "green", "blue", "pink"];
 export const itemKey = (id, number = 0) => `${id}:${number}`;
 
-export function useStudyData(canEdit = false) {
-  const [data, setData] = useState(read);
+export function useStudyData(accountId = "") {
+  const storageKey = accountId ? `${KEY}:${accountId}` : `${KEY}:public`;
+  const backupKey = `${storageKey}-local-backup`;
+  const migrationKey = `${storageKey}-migration-complete`;
+  const [data, setData] = useState(() => read(storageKey));
   const [syncError, setSyncError] = useState("");
   const [ready, setReady] = useState(false);
   const initialData = useRef(data);
-  const migrationData = useRef(null);
+  const currentAccount = useRef(accountId);
+  const migrationData = useRef(data);
   const migrationStarted = useRef(false);
   const baseline = useRef(null);
   const dirty = useRef(new Map());
@@ -40,18 +44,29 @@ export function useStudyData(canEdit = false) {
   const inFlight = useRef(new Set());
   const writeVersion = useRef(0);
   const retryTimer = useRef(null);
+  const canEdit = Boolean(accountId) && ready && currentAccount.current === accountId;
+
+  useLayoutEffect(() => {
+    if (currentAccount.current === accountId) return;
+    currentAccount.current = accountId;
+    const accountData = read(storageKey);
+    initialData.current = accountData;
+    const accountBackup = read(backupKey);
+    migrationData.current = Object.values(accountBackup).some((items) => items.length) ? accountBackup : accountData;
+    setData(accountData);
+    setReady(false);
+    setSyncError("");
+    baseline.current = null;
+    dirty.current.clear();
+    migrationChanges.current.clear();
+    migrationStarted.current = false;
+    writeVersion.current += 1;
+  }, [accountId, backupKey, storageKey]);
 
   useEffect(() => {
-    try { localStorage.setItem(KEY, JSON.stringify(data)); } catch { /* storage unavailable */ }
-  }, [data]);
-
-  useEffect(() => {
-    try {
-      migrationData.current = JSON.parse(localStorage.getItem(`${KEY}-local-backup`) || "null") || initialData.current;
-    } catch {
-      migrationData.current = initialData.current;
-    }
-  }, []);
+    if (currentAccount.current !== accountId) return;
+    try { localStorage.setItem(storageKey, JSON.stringify(data)); } catch { /* storage unavailable */ }
+  }, [data, accountId, storageKey]);
 
   useEffect(() => {
     if (!canEdit || !ready || !baseline.current) return;
@@ -64,8 +79,8 @@ export function useStudyData(canEdit = false) {
         const before = previous.get(key);
         const after = current.get(key);
         if (JSON.stringify(before) !== JSON.stringify(after)) {
-          const identity = `${collection}\u0000${key}`;
-          dirty.current.set(identity, { collection, key, payload: after, signature: JSON.stringify(after) });
+          const identity = `${accountId}\u0000${collection}\u0000${key}`;
+          dirty.current.set(identity, { accountId, collection, key, payload: after, signature: JSON.stringify(after) });
           if (after === undefined) previous.delete(key);
           else previous.set(key, after);
         }
@@ -82,13 +97,18 @@ export function useStudyData(canEdit = false) {
         if (inFlight.current.has(identity)) continue;
         inFlight.current.add(identity);
         try {
+          if (change.accountId !== currentAccount.current) continue;
           const response = await fetch(`/api/shared-state/${encodeURIComponent(change.collection)}/${encodeURIComponent(change.key)}`, {
             method: change.payload === undefined ? "DELETE" : "PUT",
-            headers: change.payload === undefined ? undefined : { "Content-Type": "application/json" },
+            headers: {
+              ...(change.payload === undefined ? {} : { "Content-Type": "application/json" }),
+              "X-Account-Id": change.accountId,
+            },
             body: change.payload === undefined ? undefined : JSON.stringify({ payload: change.payload }),
           });
           const result = change.payload === undefined ? null : await response.json().catch(() => null);
           if (!response.ok) {
+            if (response.status === 401) window.dispatchEvent(new Event("google-session-expired"));
             throw new Error(result?.error || `Vercel respondió HTTP ${response.status} al guardar. Revisa las variables de Supabase y la ruta de la API.`);
           }
           if (dirty.current.get(identity)?.signature === change.signature) dirty.current.delete(identity);
@@ -108,13 +128,13 @@ export function useStudyData(canEdit = false) {
         }
       }
       if (migrationStarted.current && migrationChanges.current.size === 0) {
-        try { localStorage.setItem(`${KEY}-migration-complete`, "true"); } catch { /* migration marker unavailable */ }
+        try { localStorage.setItem(migrationKey, "true"); } catch { /* migration marker unavailable */ }
         migrationStarted.current = false;
       }
     }
 
     flush();
-  }, [data, ready, canEdit]);
+  }, [data, ready, canEdit, accountId, migrationKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -140,19 +160,19 @@ export function useStudyData(canEdit = false) {
           initialized = true;
           const oldData = migrationData.current || initialData.current;
           if (Object.values(oldData).some((items) => Array.isArray(items) && items.length)) {
-            try { localStorage.setItem(`${KEY}-local-backup`, JSON.stringify(oldData)); } catch { /* local backup unavailable */ }
+            try { localStorage.setItem(backupKey, JSON.stringify(oldData)); } catch { /* local backup unavailable */ }
           }
           const merged = { ...remote };
           let migrationComplete = false;
-          try { migrationComplete = localStorage.getItem(`${KEY}-migration-complete`) === "true"; } catch { /* storage unavailable */ }
+          try { migrationComplete = localStorage.getItem(migrationKey) === "true"; } catch { /* storage unavailable */ }
           if (canEdit && !migrationComplete) {
             migrationStarted.current = true;
             for (const collection of collections) {
               for (const item of Array.isArray(oldData[collection]) ? oldData[collection] : []) {
                 const key = sharedItemKey(collection, item);
                 if (remote[collection].some((remoteItem) => sharedItemKey(collection, remoteItem) === key)) continue;
-                const identity = `${collection}\u0000${key}`;
-                dirty.current.set(identity, { collection, key, payload: item, signature: JSON.stringify(item) });
+                const identity = `${accountId}\u0000${collection}\u0000${key}`;
+                dirty.current.set(identity, { accountId, collection, key, payload: item, signature: JSON.stringify(item) });
                 migrationChanges.current.add(identity);
                 merged[collection].push(item);
               }
@@ -187,7 +207,7 @@ export function useStudyData(canEdit = false) {
       window.clearInterval(interval);
       if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
     };
-  }, [canEdit]);
+  }, [canEdit, accountId, backupKey, migrationKey]);
 
   const toggleFavorite = useCallback((item) => {
     if (!canEdit) return;
@@ -277,7 +297,7 @@ export function useStudyData(canEdit = false) {
     setData((d) => ({ ...d, [kind]: [] }));
   }, [canEdit]);
 
-  return { ...data, syncError, clearAll, saveMultiNote, deleteMultiNote, toggleFavorite, setHighlight, setTextHighlight, removeHighlight, saveNote, deleteNote };
+  return { ...data, canEdit, syncError, clearAll, saveMultiNote, deleteMultiNote, toggleFavorite, setHighlight, setTextHighlight, removeHighlight, saveNote, deleteNote };
 }
 
 export async function shareContent({ title, text }) {
