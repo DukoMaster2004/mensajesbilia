@@ -72,10 +72,10 @@ function QuoteSearch({ onAdd, added }) {
   );
 }
 
-export function MultiNotesView({ study, onToast, onOpen }) {
+export function MultiNotesView({ study, onToast, onOpen, canEdit }) {
   const [draft, setDraft] = useState(null);
 
-  if (draft) {
+  if (draft && canEdit) {
     const update = (patch) => setDraft((d) => ({ ...d, ...patch }));
     const canSave = draft.title.trim() || draft.text.trim() || draft.quotes.length;
     return (
@@ -112,12 +112,12 @@ export function MultiNotesView({ study, onToast, onOpen }) {
     <section className="library-view study-view">
       <div className="welcome-row"><div><h1>Nota múltiple</h1><p>Combina tus apuntes con citas de los mensajes y de la Biblia.</p></div>
         <div className="head-actions">
-          {study.multiNotes.length > 0 && (
+          {canEdit && study.multiNotes.length > 0 && (
             <button className="ghost-button danger" onClick={() => { if (window.confirm("¿Eliminar todas las notas múltiples?")) { study.clearAll("multiNotes"); onToast("Todo eliminado"); } }}>
               <Icon name="trash" size={15} /> Eliminar todo
             </button>
           )}
-          <button className="ask-cta" onClick={() => setDraft(newNote())}><Icon name="note" size={16} /> Nueva nota múltiple</button>
+          {canEdit && <button className="ask-cta" onClick={() => setDraft(newNote())}><Icon name="note" size={16} /> Nueva nota múltiple</button>}
         </div></div>
       {study.multiNotes.length === 0 ? (
         <div className="empty-study"><Icon name="note" size={26} /><p>Aún no tienes notas múltiples.</p></div>
@@ -134,9 +134,9 @@ export function MultiNotesView({ study, onToast, onOpen }) {
                 </blockquote>
               ))}
               <div className="note-actions">
-                <button onClick={() => setDraft({ ...n })}><Icon name="edit" size={14} /> Editar</button>
+                {canEdit && <button onClick={() => setDraft({ ...n })}><Icon name="edit" size={14} /> Editar</button>}
                 <button onClick={async () => onToast(await shareContent({ title: n.title || "Nota múltiple", text: noteToText(n) }))}><Icon name="share" size={14} /> Compartir</button>
-                <button onClick={() => { study.deleteMultiNote(n.id); onToast("Nota eliminada"); }}><Icon name="trash" size={14} /> Eliminar</button>
+                {canEdit && <button onClick={() => { study.deleteMultiNote(n.id); onToast("Nota eliminada"); }}><Icon name="trash" size={14} /> Eliminar</button>}
               </div>
             </div>
           ))}

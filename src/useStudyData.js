@@ -27,14 +27,16 @@ function read() {
 export const HIGHLIGHT_COLORS = ["yellow", "green", "blue", "pink"];
 export const itemKey = (id, number = 0) => `${id}:${number}`;
 
-export function useStudyData() {
+export function useStudyData(canEdit = false) {
   const [data, setData] = useState(read);
   const [syncError, setSyncError] = useState("");
   const [ready, setReady] = useState(false);
   const initialData = useRef(data);
-  const latestData = useRef(data);
+  const migrationData = useRef(null);
+  const migrationStarted = useRef(false);
   const baseline = useRef(null);
   const dirty = useRef(new Map());
+  const migrationChanges = useRef(new Set());
   const inFlight = useRef(new Set());
   const writeVersion = useRef(0);
   const retryTimer = useRef(null);
@@ -44,8 +46,15 @@ export function useStudyData() {
   }, [data]);
 
   useEffect(() => {
-    latestData.current = data;
-    if (!ready || !baseline.current) return;
+    try {
+      migrationData.current = JSON.parse(localStorage.getItem(`${KEY}-local-backup`) || "null") || initialData.current;
+    } catch {
+      migrationData.current = initialData.current;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!canEdit || !ready || !baseline.current) return;
 
     for (const collection of collections) {
       const previous = new Map((baseline.current[collection] || []).map((item) => [sharedItemKey(collection, item), item]));
@@ -83,6 +92,7 @@ export function useStudyData() {
             throw new Error(result?.error || `Vercel respondió HTTP ${response.status} al guardar. Revisa las variables de Supabase y la ruta de la API.`);
           }
           if (dirty.current.get(identity)?.signature === change.signature) dirty.current.delete(identity);
+          migrationChanges.current.delete(identity);
           writeVersion.current += 1;
           setSyncError("");
         } catch (error) {
@@ -97,10 +107,14 @@ export function useStudyData() {
           inFlight.current.delete(identity);
         }
       }
+      if (migrationStarted.current && migrationChanges.current.size === 0) {
+        try { localStorage.setItem(`${KEY}-migration-complete`, "true"); } catch { /* migration marker unavailable */ }
+        migrationStarted.current = false;
+      }
     }
 
     flush();
-  }, [data, ready]);
+  }, [data, ready, canEdit]);
 
   useEffect(() => {
     let cancelled = false;
@@ -124,30 +138,24 @@ export function useStudyData() {
 
         if (!initialized) {
           initialized = true;
-          const oldData = initialData.current;
+          const oldData = migrationData.current || initialData.current;
           if (Object.values(oldData).some((items) => Array.isArray(items) && items.length)) {
             try { localStorage.setItem(`${KEY}-local-backup`, JSON.stringify(oldData)); } catch { /* local backup unavailable */ }
           }
-          const currentData = latestData.current;
           const merged = { ...remote };
-          for (const collection of collections) {
-            const oldItems = new Map((oldData[collection] || []).map((item) => [sharedItemKey(collection, item), item]));
-            const currentItems = new Map((currentData[collection] || []).map((item) => [sharedItemKey(collection, item), item]));
-            const items = merged[collection];
-            for (const [key, item] of oldItems) {
-              if (!items.some((remoteItem) => sharedItemKey(collection, remoteItem) === key)) items.push(item);
-            }
-            const keys = new Set([...oldItems.keys(), ...currentItems.keys()]);
-            for (const key of keys) {
-              const before = oldItems.get(key);
-              const after = currentItems.get(key);
-              if (JSON.stringify(before) === JSON.stringify(after)) continue;
-              dirty.current.set(`${collection}\u0000${key}`, { collection, key, payload: after, signature: JSON.stringify(after) });
-              const index = items.findIndex((item) => sharedItemKey(collection, item) === key);
-              if (after === undefined) {
-                if (index !== -1) items.splice(index, 1);
-              } else if (index === -1) items.push(after);
-              else items[index] = after;
+          let migrationComplete = false;
+          try { migrationComplete = localStorage.getItem(`${KEY}-migration-complete`) === "true"; } catch { /* storage unavailable */ }
+          if (canEdit && !migrationComplete) {
+            migrationStarted.current = true;
+            for (const collection of collections) {
+              for (const item of Array.isArray(oldData[collection]) ? oldData[collection] : []) {
+                const key = sharedItemKey(collection, item);
+                if (remote[collection].some((remoteItem) => sharedItemKey(collection, remoteItem) === key)) continue;
+                const identity = `${collection}\u0000${key}`;
+                dirty.current.set(identity, { collection, key, payload: item, signature: JSON.stringify(item) });
+                migrationChanges.current.add(identity);
+                merged[collection].push(item);
+              }
             }
           }
           baseline.current = remote;
@@ -179,9 +187,10 @@ export function useStudyData() {
       window.clearInterval(interval);
       if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
     };
-  }, []);
+  }, [canEdit]);
 
   const toggleFavorite = useCallback((item) => {
+    if (!canEdit) return;
     setData((d) => {
       const key = itemKey(item.messageId, item.number);
       const exists = d.favorites.some((f) => f.key === key);
@@ -192,9 +201,10 @@ export function useStudyData() {
           : [{ ...item, key, createdAt: Date.now() }, ...d.favorites],
       };
     });
-  }, []);
+  }, [canEdit]);
 
   const setHighlight = useCallback((item, color) => {
+    if (!canEdit) return;
     setData((d) => {
       const key = itemKey(item.messageId, item.number);
       const current = d.highlights.find((h) => h.key === key);
@@ -202,9 +212,10 @@ export function useStudyData() {
       if (current && current.color === color) return { ...d, highlights: rest };
       return { ...d, highlights: [{ ...item, key, color, createdAt: current?.createdAt || Date.now() }, ...rest] };
     });
-  }, []);
+  }, [canEdit]);
 
   const setTextHighlight = useCallback((item, start, end, color) => {
+    if (!canEdit) return;
     setData((d) => {
       const key = `${itemKey(item.messageId, item.number)}:text:${start}:${end}`;
       const current = d.highlights.find((h) => h.key === key);
@@ -219,13 +230,15 @@ export function useStudyData() {
           : [highlight, ...d.highlights],
       };
     });
-  }, []);
+  }, [canEdit]);
 
   const removeHighlight = useCallback((key) => {
+    if (!canEdit) return;
     setData((d) => ({ ...d, highlights: d.highlights.filter((h) => h.key !== key) }));
-  }, []);
+  }, [canEdit]);
 
   const saveNote = useCallback((item, text, id) => {
+    if (!canEdit) return;
     const body = text.trim();
     if (!body) return;
     setData((d) => {
@@ -235,13 +248,15 @@ export function useStudyData() {
       const note = { ...item, id: `n${Date.now()}${Math.random().toString(36).slice(2, 6)}`, text: body, createdAt: Date.now(), updatedAt: Date.now() };
       return { ...d, notes: [note, ...d.notes] };
     });
-  }, []);
+  }, [canEdit]);
 
   const deleteNote = useCallback((id) => {
+    if (!canEdit) return;
     setData((d) => ({ ...d, notes: d.notes.filter((n) => n.id !== id) }));
-  }, []);
+  }, [canEdit]);
 
   const saveMultiNote = useCallback((note) => {
+    if (!canEdit) return;
     setData((d) => {
       const exists = d.multiNotes.some((n) => n.id === note.id);
       const saved = { ...note, updatedAt: Date.now() };
@@ -250,15 +265,17 @@ export function useStudyData() {
         multiNotes: exists ? d.multiNotes.map((n) => (n.id === note.id ? saved : n)) : [saved, ...d.multiNotes],
       };
     });
-  }, []);
+  }, [canEdit]);
 
   const deleteMultiNote = useCallback((id) => {
+    if (!canEdit) return;
     setData((d) => ({ ...d, multiNotes: d.multiNotes.filter((n) => n.id !== id) }));
-  }, []);
+  }, [canEdit]);
 
   const clearAll = useCallback((kind) => {
+    if (!canEdit) return;
     setData((d) => ({ ...d, [kind]: [] }));
-  }, []);
+  }, [canEdit]);
 
   return { ...data, syncError, clearAll, saveMultiNote, deleteMultiNote, toggleFavorite, setHighlight, setTextHighlight, removeHighlight, saveNote, deleteNote };
 }

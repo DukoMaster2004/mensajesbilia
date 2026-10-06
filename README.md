@@ -26,15 +26,15 @@ El catálogo se sirve de forma paginada y los textos completos se cargan por men
 
 En cada mensaje puedes compartir, marcar favoritos, resaltar (4 colores, incluso fragmentos elegidos manualmente) y añadir notas por párrafo o por mensaje. Las secciones **Favoritos**, **Notas** y **Resaltados** reúnen estos elementos.
 
-Los favoritos, notas, resaltados, notas múltiples y el chat se sincronizan entre todas las personas que abren la página. **Son datos públicos y compartidos:** cualquier visitante puede leerlos, cambiarlos o eliminarlos. El tema y el tamaño del texto siguen siendo preferencias locales del navegador.
+Los favoritos, notas, resaltados, notas múltiples y la conversación del administrador se muestran públicamente en modo lectura. Solo el administrador puede modificarlos después de iniciar sesión; el chat que escriben los visitantes no se publica. El tema y el tamaño del texto siguen siendo preferencias locales del navegador.
 
 Para activar la sincronización:
 
 1. Crea un proyecto en Supabase y ejecuta [`supabase/shared_page_state.sql`](./supabase/shared_page_state.sql) en el SQL Editor.
-2. En Vercel, abre **Project Settings → Environment Variables** y configura `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY` para los entornos **Production** y **Preview**. `.env.local` solo sirve para desarrollo local y no se copia al despliegue. La clave `service_role` es secreta; nunca la pongas en el código del navegador.
-3. Vuelve a desplegar el proyecto para que las funciones API reciban las variables. Las pestañas abiertas reciben actualizaciones periódicamente.
+2. Para desarrollo local, añade esas variables a `.env.local`. En Vercel, abre **Project Settings → Environment Variables** y configura `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` y `ADMIN_SESSION_SECRET` para **Production** (y **Preview**, si lo usas). Crea una contraseña larga y única para el administrador, y genera un secreto aleatorio de al menos 32 caracteres para `ADMIN_SESSION_SECRET`. `.env.local` solo sirve localmente y no se copia al despliegue. Nunca publiques estos valores ni la clave `service_role`.
+3. Vuelve a desplegar para que las funciones API reciban las variables. Después podrás iniciar sesión desde el botón de la página. La sesión usa una cookie `HttpOnly`, dura 12 horas y el servidor exige autenticación para cada escritura; las lecturas siguen siendo públicas.
 
-Al conectarse correctamente por primera vez, los elementos guardados localmente que aún no existan en el estado compartido se publican automáticamente; los elementos ya compartidos tienen prioridad. Antes de migrar, los datos locales se conservan como copia en `localStorage` (`branham-study-local-backup` y `branham-chat-local-backup`). Mientras las variables no estén configuradas, la sincronización muestra un error y los cambios nuevos siguen guardándose localmente.
+Al iniciar sesión por primera vez, los elementos que estaban guardados localmente y aún no existen en el estado compartido se publican; los elementos ya compartidos tienen prioridad. Antes de migrar, los datos locales se conservan como copia en `localStorage` (`branham-study-local-backup` y `branham-chat-local-backup`).
 
 ## Biblia
 

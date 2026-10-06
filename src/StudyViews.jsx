@@ -18,8 +18,11 @@ export function NoteComposer({ initial = "", onSave, onCancel, placeholder = "Es
   );
 }
 
-export function NoteItem({ note, study, onToast, showSource, onOpen }) {
+export function NoteItem({ note, study, onToast, showSource, onOpen, canEdit = false }) {
   const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (!canEdit) setEditing(false);
+  }, [canEdit]);
   return (
     <div className="note-item">
       {showSource && (
@@ -36,16 +39,16 @@ export function NoteItem({ note, study, onToast, showSource, onOpen }) {
       )}
       {!editing && (
         <div className="note-actions">
-          <button onClick={() => setEditing(true)}><Icon name="edit" size={14} /> Editar</button>
+          {canEdit && <button onClick={() => setEditing(true)}><Icon name="edit" size={14} /> Editar</button>}
           <button onClick={async () => onToast(await shareContent({ title: `${note.title}${note.number ? `, ${note.bible ? "versículo" : "párrafo"} ${note.number}` : ""}`, text: `${note.quote ? `“${note.quote}”\n` : ""}Nota: ${note.text}` }))}><Icon name="share" size={14} /> Compartir</button>
-          <button onClick={() => { study.deleteNote(note.id); onToast("Nota eliminada"); }}><Icon name="trash" size={14} /> Eliminar</button>
+          {canEdit && <button onClick={() => { study.deleteNote(note.id); onToast("Nota eliminada"); }}><Icon name="trash" size={14} /> Eliminar</button>}
         </div>
       )}
     </div>
   );
 }
 
-export function MessageReader({ message, loading, error, onRetry, jumpTo, onBack, onAsk, study, onToast }) {
+export function MessageReader({ message, loading, error, onRetry, jumpTo, onBack, onAsk, study, onToast, canEdit }) {
   const [composer, setComposer] = useState(null);
 
   useEffect(() => {
@@ -80,10 +83,12 @@ export function MessageReader({ message, loading, error, onRetry, jumpTo, onBack
       <div className="reader-toolbar">
         <button className="ghost-button" onClick={onBack}><Icon name="back" size={15} /> Mensajes</button>
         <div className="toolbar-actions">
-          <button className={wholeFav ? "tool-btn on" : "tool-btn"} onClick={() => { study.toggleFavorite(messageItem); onToast(wholeFav ? "Quitado de favoritos" : "Agregado a favoritos"); }}>
-            <Icon name="star" size={16} filled={wholeFav} /><span>Favorito</span>
-          </button>
-          <button className="tool-btn" onClick={() => setComposer({ number: 0 })}><Icon name="note" size={16} /><span>Nota</span></button>
+          {canEdit && <>
+            <button className={wholeFav ? "tool-btn on" : "tool-btn"} onClick={() => { study.toggleFavorite(messageItem); onToast(wholeFav ? "Quitado de favoritos" : "Agregado a favoritos"); }}>
+              <Icon name="star" size={16} filled={wholeFav} /><span>Favorito</span>
+            </button>
+            <button className="tool-btn" onClick={() => setComposer({ number: 0 })}><Icon name="note" size={16} /><span>Nota</span></button>
+          </>}
           <button className="tool-btn" onClick={async () => onToast(await shareContent({ title: `${message.title} (${message.id})`, text: `Mensaje: ${message.title}${meta ? `\n${meta}` : ""}` }))}>
             <Icon name="share" size={16} /><span>Compartir</span>
           </button>
@@ -105,10 +110,10 @@ export function MessageReader({ message, loading, error, onRetry, jumpTo, onBack
         </section>
       )}
 
-      {(composer?.number === 0 || messageNotes.length > 0) && (
+      {((canEdit && composer?.number === 0) || messageNotes.length > 0) && (
         <div className="notes-block">
-          {messageNotes.map((n) => <NoteItem key={n.id} note={n} study={study} onToast={onToast} />)}
-          {composer?.number === 0 && (
+          {messageNotes.map((n) => <NoteItem key={n.id} note={n} study={study} onToast={onToast} canEdit={canEdit} />)}
+          {canEdit && composer?.number === 0 && (
             <NoteComposer onCancel={() => setComposer(null)}
               onSave={(t) => { study.saveNote({ messageId: message.id, number: 0, title: message.title, quote: "" }, t); setComposer(null); onToast("Nota guardada"); }} />
           )}
@@ -127,12 +132,13 @@ export function MessageReader({ message, loading, error, onRetry, jumpTo, onBack
             <section className={`paragraph${hl ? ` hl hl-${hl.color}` : ""}${jumpTo === p.number ? " jumped" : ""}`} id={`p-${p.number}`} key={p.number}>
               <span className="paragraph-number">{p.number}</span>
               <div className="paragraph-body">
-                <p><HighlightableText text={p.text} highlights={textHighlights}
+                <p><HighlightableText text={p.text} highlights={textHighlights} canEdit={canEdit}
                   onSave={(start, end, color) => {
                     study.setTextHighlight(item, start, end, color);
                     onToast("Resaltado actualizado");
                   }} /></p>
                 <div className="paragraph-actions">
+                  {canEdit && <>
                   {HIGHLIGHT_COLORS.map((c) => (
                     <button key={c} className={`swatch swatch-${c}${hl?.color === c ? " on" : ""}`} aria-label={`Resaltar ${COLOR_LABEL[c]}`} title={`Resaltar ${COLOR_LABEL[c]}`}
                       onClick={() => { study.setHighlight(item, c); onToast(hl?.color === c ? "Resaltado quitado" : "Resaltado"); }} />
@@ -146,13 +152,14 @@ export function MessageReader({ message, loading, error, onRetry, jumpTo, onBack
                     <Icon name="star" size={15} filled={fav} />
                   </button>
                   <button className="mini" title="Agregar nota" aria-label="Agregar nota" onClick={() => setComposer({ number: p.number })}><Icon name="note" size={15} /></button>
+                  </>}
                   <button className="mini" title="Compartir" aria-label="Compartir"
                     onClick={async () => onToast(await shareContent({ title: `${message.title}, ${message.id}, párrafo ${p.number}`, text: `“${p.text}”` }))}>
                     <Icon name="share" size={15} />
                   </button>
                 </div>
-                {notes.map((n) => <NoteItem key={n.id} note={n} study={study} onToast={onToast} />)}
-                {composer?.number === p.number && (
+                {notes.map((n) => <NoteItem key={n.id} note={n} study={study} onToast={onToast} canEdit={canEdit} />)}
+                {canEdit && composer?.number === p.number && (
                   <NoteComposer onCancel={() => setComposer(null)}
                     onSave={(t) => { study.saveNote({ messageId: message.id, number: p.number, title: message.title, quote: p.text }, t); setComposer(null); onToast("Nota guardada"); }} />
                 )}
@@ -171,13 +178,13 @@ const TITLES = {
   highlights: ["Resaltados", "Pasajes que marcaste mientras leías."],
 };
 
-export function StudyListView({ kind, study, onOpen, onToast }) {
+export function StudyListView({ kind, study, onOpen, onToast, canEdit }) {
   const [title, subtitle] = TITLES[kind];
   const items = study[kind];
   return (
     <section className="library-view study-view">
       <div className="welcome-row"><div><h1>{title}</h1><p>{subtitle}</p></div>
-        {items.length > 0 && (
+        {canEdit && items.length > 0 && (
           <button className="ghost-button danger" onClick={() => { if (window.confirm(`¿Eliminar todos los elementos de ${title}?`)) { study.clearAll(kind); onToast("Todo eliminado"); } }}>
             <Icon name="trash" size={15} /> Eliminar todo
           </button>
@@ -190,7 +197,7 @@ export function StudyListView({ kind, study, onOpen, onToast }) {
         <div className="study-list">
           {items.map((it) => {
             const open = () => (it.bible ? onOpen(it.bible) : onOpen(it.messageId, it.number || null));
-            if (kind === "notes") return <NoteItem key={it.id} note={it} study={study} onToast={onToast} showSource onOpen={open} />;
+            if (kind === "notes") return <NoteItem key={it.id} note={it} study={study} onToast={onToast} showSource onOpen={open} canEdit={canEdit} />;
             const ref = it.number ? `${it.title} · ${it.bible ? "versículo" : "párrafo"} ${it.number}` : it.title;
             return (
               <div className={`study-item${kind === "highlights" ? ` hl hl-${it.color}` : ""}`} key={it.key}>
@@ -199,7 +206,7 @@ export function StudyListView({ kind, study, onOpen, onToast }) {
                 <div className="note-actions">
                   <button onClick={open}><Icon name="arrow" size={14} /> Abrir</button>
                   <button onClick={async () => onToast(await shareContent({ title: `${ref}`, text: it.text ? `“${it.text}”` : it.title }))}><Icon name="share" size={14} /> Compartir</button>
-                  <button onClick={() => { kind === "favorites" ? study.toggleFavorite(it) : study.removeHighlight(it.key); onToast("Eliminado"); }}><Icon name="trash" size={14} /> Quitar</button>
+                  {canEdit && <button onClick={() => { kind === "favorites" ? study.toggleFavorite(it) : study.removeHighlight(it.key); onToast("Eliminado"); }}><Icon name="trash" size={14} /> Quitar</button>}
                 </div>
               </div>
             );

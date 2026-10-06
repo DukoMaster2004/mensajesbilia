@@ -1,4 +1,5 @@
 import { getBible, searchVerses, verseRange, pickVerse, parseReference, strip } from "./bible.mjs";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import dotenv from "dotenv";
 import express from "express";
 import { readFile } from "node:fs/promises";
@@ -26,6 +27,112 @@ function getGeminiApiKey() {
 }
 
 const sharedCollections = new Set(["favorites", "notes", "highlights", "multiNotes", "chat"]);
+const adminCookieName = "mensajes_admin_session";
+const adminSessionDuration = 12 * 60 * 60;
+
+function getAdminConfig() {
+  const email = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+  const password = process.env.ADMIN_PASSWORD;
+  const secret = process.env.ADMIN_SESSION_SECRET;
+  if (!email || !password || !secret || secret.length < 32) return null;
+  return { email, password, secret };
+}
+
+function safeCompare(left, right) {
+  return timingSafeEqual(
+    createHash("sha256").update(left).digest(),
+    createHash("sha256").update(right).digest(),
+  );
+}
+
+function createAdminToken(email, secret) {
+  const payload = Buffer.from(JSON.stringify({
+    email,
+    expiresAt: Math.floor(Date.now() / 1000) + adminSessionDuration,
+  })).toString("base64url");
+  const signature = createHmac("sha256", secret).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+}
+
+function isAdminSession(request) {
+  const config = getAdminConfig();
+  if (!config) return false;
+  const cookie = request.headers.cookie?.split(";").map((part) => part.trim())
+    .find((part) => part.startsWith(`${adminCookieName}=`));
+  if (!cookie) return false;
+  let token;
+  try {
+    token = decodeURIComponent(cookie.slice(adminCookieName.length + 1));
+  } catch {
+    return false;
+  }
+  const separator = token.lastIndexOf(".");
+  if (separator < 1) return false;
+  const payload = token.slice(0, separator);
+  const signature = Buffer.from(token.slice(separator + 1), "base64url");
+  const expected = createHmac("sha256", config.secret).update(payload).digest();
+  if (signature.length !== expected.length || !timingSafeEqual(signature, expected)) return false;
+  try {
+    const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    return session.email === config.email && session.expiresAt > Math.floor(Date.now() / 1000);
+  } catch {
+    return false;
+  }
+}
+
+function isSameOriginRequest(request) {
+  const origin = request.get("origin");
+  if (!origin) return false;
+  try {
+    const parsedOrigin = new URL(origin);
+    return parsedOrigin.host === request.get("host")
+      && (process.env.NODE_ENV !== "production" || parsedOrigin.protocol === "https:");
+  } catch {
+    return false;
+  }
+}
+
+app.get("/api/admin/session", (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({
+    configured: Boolean(getAdminConfig()),
+    authenticated: isAdminSession(request),
+  });
+});
+
+app.post("/api/admin/login", (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  if (!isSameOriginRequest(request)) {
+    response.status(403).json({ error: "La solicitud de inicio de sesión no es válida." });
+    return;
+  }
+  const config = getAdminConfig();
+  if (!config) {
+    response.status(503).json({ error: "El acceso de administración aún no está configurado en el servidor." });
+    return;
+  }
+  const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "";
+  const password = typeof request.body?.password === "string" ? request.body.password : "";
+  if (!safeCompare(email, config.email) || !safeCompare(password, config.password)) {
+    response.status(401).json({ error: "El correo o la contraseña no son correctos." });
+    return;
+  }
+  const token = createAdminToken(config.email, config.secret);
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  response.setHeader("Set-Cookie", `${adminCookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${adminSessionDuration}${secure}`);
+  response.json({ authenticated: true });
+});
+
+app.delete("/api/admin/session", (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  if (!isSameOriginRequest(request)) {
+    response.status(403).json({ error: "La solicitud de cierre de sesión no es válida." });
+    return;
+  }
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  response.setHeader("Set-Cookie", `${adminCookieName}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure}`);
+  response.status(204).end();
+});
 
 function getSupabaseConfig() {
   const url = process.env.SUPABASE_URL?.replace(/\/+$/, "");
@@ -108,6 +215,14 @@ app.get("/api/shared-state", async (request, response) => {
 });
 
 app.put("/api/shared-state/:collection/:key", async (request, response) => {
+  if (!isSameOriginRequest(request)) {
+    response.status(403).json({ error: "La solicitud de guardado no es válida." });
+    return;
+  }
+  if (!isAdminSession(request)) {
+    response.status(401).json({ error: "Inicia sesión como administrador para guardar cambios." });
+    return;
+  }
   try {
     const collection = sharedCollection(request.params.collection);
     const itemKey = request.params.key;
@@ -150,6 +265,14 @@ app.put("/api/shared-state/:collection/:key", async (request, response) => {
 });
 
 app.delete("/api/shared-state/:collection/:key", async (request, response) => {
+  if (!isSameOriginRequest(request)) {
+    response.status(403).json({ error: "La solicitud de eliminación no es válida." });
+    return;
+  }
+  if (!isAdminSession(request)) {
+    response.status(401).json({ error: "Inicia sesión como administrador para eliminar cambios." });
+    return;
+  }
   try {
     const collection = sharedCollection(request.params.collection);
     const itemKey = request.params.key;

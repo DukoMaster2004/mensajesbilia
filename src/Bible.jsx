@@ -78,7 +78,7 @@ function BibleChat({ onToast, onOpen }) {
   );
 }
 
-export function BibleView({ onToast, study, target }) {
+export function BibleView({ onToast, study, target, canEdit }) {
   const [composer, setComposer] = useState(null);
   const [tab, setTab] = useState("read");
   const [books, setBooks] = useState([]);
@@ -211,12 +211,13 @@ export function BibleView({ onToast, study, target }) {
                 const item = { messageId: id, number: v.verse, title, text: v.text, bible: { book: pos.book, chapter: chapter.chapter, verse: v.verse } };
                 return (
                   <div key={v.verse} id={`bv-${v.verse}`} className={`bible-verse${hl ? ` hl hl-${hl.color}` : ""}${focus === v.verse ? " focus" : ""}`}>
-                    <p><sup>{v.verse}</sup>{" "}<HighlightableText text={v.text} highlights={textHighlights}
+                    <p><sup>{v.verse}</sup>{" "}<HighlightableText text={v.text} highlights={textHighlights} canEdit={canEdit}
                       onSave={(start, end, color) => {
                         study.setTextHighlight(item, start, end, color);
                         onToast("Resaltado actualizado");
                       }} /></p>
                     <div className="paragraph-actions">
+                      {canEdit && <>
                       {HIGHLIGHT_COLORS.map((c) => (
                         <button key={c} className={`swatch swatch-${c}${hl?.color === c ? " on" : ""}`} aria-label={`Resaltar ${COLOR_LABEL[c]}`} title={`Resaltar ${COLOR_LABEL[c]}`}
                           onClick={() => { study.setHighlight(item, c); onToast(hl?.color === c ? "Resaltado quitado" : "Resaltado"); }} />
@@ -224,11 +225,12 @@ export function BibleView({ onToast, study, target }) {
                       {hl && <button className="mini" title="Quitar resaltado" aria-label="Quitar resaltado" onClick={() => { study.setHighlight(item, hl.color); onToast("Resaltado quitado"); }}><Icon name="trash" size={15} /></button>}
                       <button className={fav ? "mini on" : "mini"} title="Favorito" aria-label="Favorito" onClick={() => { study.toggleFavorite(item); onToast(fav ? "Quitado de favoritos" : "Agregado a favoritos"); }}><Icon name="star" size={15} filled={fav} /></button>
                       <button className="mini" title="Agregar nota" aria-label="Agregar nota" onClick={() => setComposer(v.verse)}><Icon name="note" size={15} /></button>
+                      </>}
                       <button className="mini" title="Compartir versículo" aria-label="Compartir versículo"
                         onClick={async () => onToast(await shareContent({ title: `${title}:${v.verse} (RV 2009)`, text: `“${v.text}”` }))}><Icon name="share" size={15} /></button>
                     </div>
-                    {notes.map((n) => <NoteItem key={n.id} note={n} study={study} onToast={onToast} />)}
-                    {composer === v.verse && (
+                    {notes.map((n) => <NoteItem key={n.id} note={n} study={study} onToast={onToast} canEdit={canEdit} />)}
+                    {canEdit && composer === v.verse && (
                       <NoteComposer onCancel={() => setComposer(null)}
                         onSave={(t) => { study.saveNote({ ...item, quote: v.text }, t); setComposer(null); onToast("Nota guardada"); }} />
                     )}

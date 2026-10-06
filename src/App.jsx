@@ -21,9 +21,9 @@ async function api(path, options) {
   return data;
 }
 
-function readSavedChat() {
+function readSavedChat(key = "branham-chat") {
   try {
-    const saved = JSON.parse(localStorage.getItem("branham-chat") || "[]");
+    const saved = JSON.parse(localStorage.getItem(key) || "[]");
     return saved.length ? saved : initialChat;
   } catch {
     return initialChat;
@@ -41,6 +41,12 @@ function readPreference(key, fallback, choices) {
 
 function App() {
   const [section, setSection] = useState("library");
+  const [adminSession, setAdminSession] = useState({ configured: false, authenticated: false, loading: true });
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [loginBusy, setLoginBusy] = useState(false);
   const [theme, setTheme] = useState(() => readPreference("branham-theme", "light", ["light", "dark"]));
   const [textSize, setTextSize] = useState(() => readPreference("branham-text-size", "medium", ["small", "medium", "large"]));
   const [query, setQuery] = useState("");
@@ -58,7 +64,7 @@ function App() {
   const [chatError, setChatError] = useState("");
   const [sending, setSending] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const study = useStudyData();
+  const study = useStudyData(adminSession.authenticated);
   const [bibleTarget, setBibleTarget] = useState(null);
   const [toast, setToast] = useState("");
   const showToast = useCallback((text) => {
@@ -75,9 +81,66 @@ function App() {
   const chatWriteVersionRef = useRef(0);
   const chatWriteQueue = useRef(Promise.resolve());
   const chatLatestRef = useRef(chat);
-  const chatInitialRef = useRef(chat);
+  const adminAuthenticatedRef = useRef(adminSession.authenticated);
+  adminAuthenticatedRef.current = adminSession.authenticated;
+
+  useEffect(() => {
+    let cancelled = false;
+    api("/api/admin/session")
+      .then((session) => {
+        if (!cancelled) setAdminSession({ ...session, loading: false });
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setAdminSession({ configured: false, authenticated: false, loading: false });
+          showToast(error.message);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [showToast]);
+
+  useEffect(() => {
+    const handleExpired = () => {
+      setAdminSession((session) => ({ ...session, authenticated: false }));
+      showToast("La sesión terminó. Inicia sesión de nuevo para guardar cambios.");
+    };
+    window.addEventListener("admin-session-expired", handleExpired);
+    return () => window.removeEventListener("admin-session-expired", handleExpired);
+  }, [showToast]);
+
+  async function signIn(event) {
+    event.preventDefault();
+    setLoginBusy(true);
+    setLoginError("");
+    try {
+      await api("/api/admin/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+      });
+      setAdminSession((session) => ({ ...session, configured: true, authenticated: true, loading: false }));
+      setLoginOpen(false);
+      setLoginPassword("");
+      showToast("Sesión de administrador iniciada");
+    } catch (error) {
+      setLoginError(error.message);
+    } finally {
+      setLoginBusy(false);
+    }
+  }
+
+  async function signOut() {
+    try {
+      await api("/api/admin/session", { method: "DELETE" });
+      setAdminSession((session) => ({ ...session, authenticated: false }));
+      showToast("Sesión cerrada");
+    } catch (error) {
+      showToast(error.message);
+    }
+  }
 
   const enqueueChatSave = useCallback((messages) => {
+    if (!adminAuthenticatedRef.current) return;
     const snapshot = JSON.stringify(messages);
     chatPendingRef.current += 1;
     chatWriteQueue.current = chatWriteQueue.current.then(async () => {
@@ -92,8 +155,12 @@ function App() {
         setChatSyncError("");
       } catch (error) {
         setChatSyncError(error.message);
+        if (error.message.includes("sesión") || error.message.includes("HTTP 401")) {
+          window.dispatchEvent(new Event("admin-session-expired"));
+        }
         window.setTimeout(() => {
-          if (chatReadyRef.current && chatSnapshotRef.current !== snapshot && JSON.stringify(chatLatestRef.current) === snapshot) {
+          if (adminAuthenticatedRef.current && chatReadyRef.current
+            && chatSnapshotRef.current !== snapshot && JSON.stringify(chatLatestRef.current) === snapshot) {
             enqueueChatSave(chatLatestRef.current);
           }
         }, 5000);
@@ -119,14 +186,22 @@ function App() {
           initialized = true;
           const localChat = readSavedChat();
           if (localChat.length > 1) {
-            try { localStorage.setItem("branham-chat-local-backup", JSON.stringify(localChat)); } catch { /* local backup unavailable */ }
+            try {
+              if (!localStorage.getItem("branham-chat-local-backup")) {
+                localStorage.setItem("branham-chat-local-backup", JSON.stringify(localChat));
+              }
+            } catch { /* local backup unavailable */ }
           }
-          const pendingLocalChat = JSON.stringify(chatLatestRef.current) !== JSON.stringify(chatInitialRef.current);
           chatSnapshotRef.current = snapshot;
           chatReadyRef.current = true;
-          if (pendingLocalChat) enqueueChatSave(chatLatestRef.current);
-          else if (!remoteEntry && localChat.length > 1) setChat(localChat);
-          else setChat(remote);
+          if (adminSession.authenticated && !remoteEntry) {
+            const oldChat = readSavedChat("branham-chat-local-backup");
+            const migrationChat = oldChat.length > 1 ? oldChat : localChat;
+            if (migrationChat.length > 1) {
+              setChat(migrationChat);
+              enqueueChatSave(migrationChat);
+            } else setChat(remote);
+          } else setChat(remote);
         } else if (!chatPendingRef.current && snapshot !== chatSnapshotRef.current) {
           chatSnapshotRef.current = snapshot;
           setChat(remote);
@@ -139,7 +214,7 @@ function App() {
     synchronizeChat();
     const interval = window.setInterval(synchronizeChat, 5000);
     return () => { cancelled = true; window.clearInterval(interval); };
-  }, []);
+  }, [adminSession.authenticated, enqueueChatSave]);
 
   const loadMessages = useCallback(async (search = "", offset = 0, append = false) => {
     setLoadingList(true);
@@ -166,13 +241,13 @@ function App() {
 
   useEffect(() => {
     chatLatestRef.current = chat;
-    localStorage.setItem("branham-chat", JSON.stringify(chat));
+    try { localStorage.setItem("branham-chat", JSON.stringify(chat)); } catch { /* local backup unavailable */ }
     chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-    if (!chatReadyRef.current) return;
+    if (!adminSession.authenticated || !chatReadyRef.current) return;
     const snapshot = JSON.stringify(chat);
     if (snapshot === chatSnapshotRef.current) return;
     enqueueChatSave(chat);
-  }, [chat, enqueueChatSave]);
+  }, [chat, enqueueChatSave, adminSession.authenticated]);
 
   useEffect(() => {
     if (study.syncError) showToast(study.syncError);
@@ -313,10 +388,14 @@ function App() {
           </button>
           <div className="breadcrumbs"><span>Biblioteca</span><Icon name="right" size={14} /><strong>{section === "chat" ? "Chat con IA" : section === "settings" ? "Configuración" : section === "favorites" ? "Favoritos" : section === "notes" ? "Notas" : section === "highlights" ? "Resaltados" : section === "multinotes" ? "Nota múltiple" : section === "bible" ? "Biblia" : selectedMessage?.title || "Mensajes"}</strong></div>
           <div className="topbar-meta"><span className="status-dot" /> Catálogo disponible</div>
+          <button className="session-button" disabled={adminSession.loading}
+            onClick={() => adminSession.authenticated ? signOut() : setLoginOpen(true)}>
+            {adminSession.authenticated ? "Cerrar sesión" : adminSession.loading ? "Verificando…" : "Iniciar sesión"}
+          </button>
         </header>
 
         <aside className="shared-data-notice" role="note">
-          Favoritos, notas, resaltados y conversaciones son públicos y se comparten con todos los visitantes.
+          Todos pueden leer la biblioteca compartida. Solo el administrador puede guardar o editar favoritos, notas, notas múltiples, resaltados y la conversación pública.
         </aside>
 
         {section === "library" && (
@@ -328,6 +407,7 @@ function App() {
               onRetry={() => openMessage(selectedId)}
               jumpTo={selectedParagraph}
               study={study}
+              canEdit={adminSession.authenticated}
               onToast={showToast}
               onBack={() => { setSelectedId(""); setSelectedMessage(null); }}
               onAsk={(text) => {
@@ -392,6 +472,7 @@ function App() {
         {section === "chat" && (
           <ChatView
             chat={chat}
+            canEdit={adminSession.authenticated}
             draft={draft}
             setDraft={setDraft}
             sendMessage={sendMessage}
@@ -415,12 +496,12 @@ function App() {
           />
         )}
         {["favorites", "notes", "highlights"].includes(section) && (
-          <StudyListView kind={section} study={study} onToast={showToast}
+          <StudyListView kind={section} study={study} canEdit={adminSession.authenticated} onToast={showToast}
             onOpen={(id, n) => { if (id && typeof id === "object") { setBibleTarget({ ...id, nonce: Date.now() }); setSection("bible"); } else { setSection("library"); openMessage(id, n); } }} />
         )}
-        {section === "bible" && <BibleView onToast={showToast} study={study} target={bibleTarget} />}
+        {section === "bible" && <BibleView onToast={showToast} study={study} target={bibleTarget} canEdit={adminSession.authenticated} />}
         {section === "multinotes" && (
-          <MultiNotesView study={study} onToast={showToast}
+          <MultiNotesView study={study} canEdit={adminSession.authenticated} onToast={showToast}
             onOpen={(id, n) => { setSection("library"); openMessage(id, n); }} />
         )}
         {section === "settings" && (
@@ -432,6 +513,27 @@ function App() {
           />
         )}
       </main>
+      {loginOpen && (
+        <div className="admin-modal-backdrop" role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setLoginOpen(false);
+        }}>
+          <section className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-login-title">
+            <button className="admin-modal-close" onClick={() => { setLoginOpen(false); setLoginError(""); }} aria-label="Cerrar">×</button>
+            <p className="eyebrow">ADMINISTRACIÓN</p>
+            <h2 id="admin-login-title">Iniciar sesión</h2>
+            {adminSession.configured ? (
+              <form onSubmit={signIn}>
+                <label>Correo<input autoComplete="username" type="email" value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} required /></label>
+                <label>Contraseña<input autoComplete="current-password" type="password" value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} required /></label>
+                {loginError && <p className="admin-login-error" role="alert">{loginError}</p>}
+                <button className="ask-cta" type="submit" disabled={loginBusy}>{loginBusy ? "Ingresando…" : "Ingresar"}</button>
+              </form>
+            ) : (
+              <p className="admin-setup-hint">El propietario debe configurar <code>ADMIN_EMAIL</code>, <code>ADMIN_PASSWORD</code> y <code>ADMIN_SESSION_SECRET</code> en las variables privadas del servidor y volver a desplegar.</p>
+            )}
+          </section>
+        </div>
+      )}
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );
@@ -494,7 +596,7 @@ function SettingsView({ theme, setTheme, textSize, setTextSize }) {
   );
 }
 
-function ChatView({ chat, draft, setDraft, sendMessage, sending, error, clearChat, inputRef, chatEndRef, onOpenSource, onOpenLibrary, onToast, onDeleteMessage, onEditMessage }) {
+function ChatView({ chat, canEdit, draft, setDraft, sendMessage, sending, error, clearChat, inputRef, chatEndRef, onOpenSource, onOpenLibrary, onToast, onDeleteMessage, onEditMessage }) {
   const [editing, setEditing] = useState(null);
   return (
     <section className="chat-view">
@@ -529,7 +631,7 @@ function ChatView({ chat, draft, setDraft, sendMessage, sending, error, clearCha
                 ) : (
                   <div className="bubble">{message.text}</div>
                 )}
-                {index > 0 && (
+                {canEdit && index > 0 && (
                   <div className="note-actions chat-actions">
                     <button onClick={() => setEditing({ index, text: message.text })}><Icon name="edit" size={14} /> Editar</button>
                     <button onClick={() => { onDeleteMessage(index); onToast("Mensaje eliminado"); }}><Icon name="trash" size={14} /> Eliminar</button>

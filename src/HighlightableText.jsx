@@ -10,7 +10,7 @@ function getOffset(root, node, offset) {
   return range.toString().length;
 }
 
-export function HighlightableText({ text, highlights, onSave }) {
+export function HighlightableText({ text, highlights, onSave, canEdit = true }) {
   const textRef = useRef(null);
   const [manualMode, setManualMode] = useState(false);
   const [selection, setSelection] = useState(null);
@@ -57,7 +57,7 @@ export function HighlightableText({ text, highlights, onSave }) {
           ? <mark className={`text-highlight hl-${color}`} key={`${start}-${end}`}>{text.slice(start, end)}</mark>
           : <span key={`${start}-${end}`}>{text.slice(start, end)}</span>)}
       </span>
-      <span className="manual-highlight-controls">
+      {canEdit && <span className="manual-highlight-controls">
         <button className={manualMode ? "manual-highlight-toggle active" : "manual-highlight-toggle"}
           type="button" aria-pressed={manualMode}
           onClick={() => { setManualMode((active) => !active); setSelection(null); }}>
@@ -79,7 +79,7 @@ export function HighlightableText({ text, highlights, onSave }) {
             ))}
           </div>
         ) : <span className="manual-highlight-hint">Selecciona con el cursor la parte que quieres resaltar.</span>)}
-      </span>
+      </span>}
     </>
   );
 }
