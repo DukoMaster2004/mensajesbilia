@@ -300,6 +300,14 @@ export function useStudyData(accountId = "") {
   return { ...data, canEdit, syncError, clearAll, saveMultiNote, deleteMultiNote, toggleFavorite, setHighlight, setTextHighlight, removeHighlight, saveNote, deleteNote };
 }
 
+export function conversationToText(messages, label) {
+  const body = messages
+    .filter((m) => m.text)
+    .map((m) => `${m.role === "user" ? "Pregunta" : "Respuesta"}: ${m.text}`)
+    .join("\n\n");
+  return label ? `${label}\n\n${body}` : body;
+}
+
 export async function shareContent({ title, text }) {
   const url = window.location.origin;
   const body = `${text}\n— ${title}`;
@@ -311,10 +319,29 @@ export async function shareContent({ title, text }) {
       if (error?.name === "AbortError") return "";
     }
   }
+  const payload = `${body}\n${url}`;
   try {
-    await navigator.clipboard.writeText(`${body}\n${url}`);
+    await navigator.clipboard.writeText(payload);
     return "Copiado al portapapeles";
   } catch {
-    return "No se pudo compartir";
+    return legacyCopy(payload) ? "Copiado al portapapeles" : "No se pudo compartir";
   }
+}
+
+function legacyCopy(text) {
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.top = "-1000px";
+  document.body.appendChild(area);
+  area.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  }
+  area.remove();
+  return ok;
 }

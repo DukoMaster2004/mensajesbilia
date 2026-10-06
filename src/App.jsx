@@ -3,7 +3,7 @@ import Icon from "./Icon.jsx";
 import { BibleView } from "./Bible.jsx";
 import { MultiNotesView } from "./MultiNotes.jsx";
 import { MessageReader, StudyListView } from "./StudyViews.jsx";
-import { shareContent, useStudyData } from "./useStudyData.js";
+import { conversationToText, shareContent, useStudyData } from "./useStudyData.js";
 
 const emptyPage = { total: 0, sermons: [] };
 const initialChat = [
@@ -572,7 +572,13 @@ function ChatView({ chat, canEdit, draft, setDraft, sendMessage, sending, error,
           <span className="chat-avatar"><Icon name="spark" size={20} /></span>
           <div><p className="eyebrow">ASISTENTE DE ESTUDIO</p><h1>Pregúntale a los mensajes</h1></div>
         </div>
-        <button className="clear-chat" onClick={clearChat} title="Nueva conversación"><Icon name="close" size={16} /><span>Nuevo chat</span></button>
+        <div className="chat-heading-actions">
+          <button className="clear-chat" title="Compartir conversación" disabled={chat.length <= 1}
+            onClick={async () => onToast(await shareContent({ title: "Mensajes de William Branham", text: conversationToText(chat.slice(1)) }))}>
+            <Icon name="share" size={16} /><span>Compartir</span>
+          </button>
+          <button className="clear-chat" onClick={clearChat} title="Nueva conversación"><Icon name="close" size={16} /><span>Nuevo chat</span></button>
+        </div>
       </div>
       <div className="chat-context"><span className="status-dot" /> Respuestas basadas en pasajes del catálogo <span className="context-separator">·</span> Las fuentes aparecen debajo de cada respuesta</div>
       <div className="chat-scroll">

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Icon from "./Icon.jsx";
-import { HIGHLIGHT_COLORS, itemKey, shareContent } from "./useStudyData.js";
+import { conversationToText, HIGHLIGHT_COLORS, itemKey, shareContent } from "./useStudyData.js";
 import { NoteComposer, NoteItem } from "./StudyViews.jsx";
 import { HighlightableText } from "./HighlightableText.jsx";
 
@@ -28,6 +28,14 @@ function VerseList({ verses, onToast, onOpen }) {
       </div>
     </div>
   ));
+}
+
+function bibleConversation(chat) {
+  return conversationToText(chat.map((m) => {
+    if (!m.verses?.length) return m;
+    const verses = m.verses.map((v) => `- ${ref(v)}: “${v.text}”`).join("\n");
+    return { ...m, text: `${m.text ? `${m.text}\n\n` : ""}Versículos:\n${verses}` };
+  }));
 }
 
 function BibleChat({ onToast, onOpen }) {
@@ -73,7 +81,15 @@ function BibleChat({ onToast, onOpen }) {
           placeholder="¿Qué dice la Biblia sobre la fe?" />
         <button type="submit" disabled={!draft.trim() || sending} aria-label="Enviar"><Icon name="send" size={17} /></button>
       </form>
-      {chat.length > 0 && <button className="ghost-button" onClick={() => setChat([])}><Icon name="trash" size={14} /> Borrar conversación</button>}
+      {chat.length > 0 && (
+        <div className="bible-chat-actions">
+          <button className="ghost-button" title="Compartir conversación"
+            onClick={async () => onToast(await shareContent({ title: "Biblia Reina-Valera 2009", text: bibleConversation(chat) }))}>
+            <Icon name="share" size={14} /> Compartir conversación</button>
+          <button className="ghost-button danger" title="Borrar conversación" onClick={() => setChat([])}>
+            <Icon name="trash" size={14} /> Borrar conversación</button>
+        </div>
+      )}
     </div>
   );
 }
