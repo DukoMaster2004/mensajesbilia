@@ -365,6 +365,13 @@ h1, h2 { font-family: "Manrope", sans-serif; }
 .paragraph-actions { display: flex; align-items: center; gap: 6px; margin-top: 8px; opacity: .35; transition: opacity .15s; }
 .paragraph:hover .paragraph-actions, .paragraph:focus-within .paragraph-actions, .paragraph.hl .paragraph-actions { opacity: 1; }
 @media (hover: none) { .paragraph-actions { opacity: 1; } }
+.highlightable-text { white-space: pre-wrap; }
+.text-highlight { padding: 0; border-radius: 2px; color: inherit; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.manual-highlight-controls { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-left: 8px; vertical-align: middle; }
+.manual-highlight-toggle { border: 0; padding: 2px 0; background: transparent; color: #738075; font: 600 10px "Manrope", sans-serif; cursor: pointer; }
+.manual-highlight-toggle:hover, .manual-highlight-toggle.active { color: var(--green-dark, #2f5d3a); text-decoration: underline; }
+.manual-highlight-hint, .manual-highlight-palette { color: #818981; font: 500 10px "Manrope", sans-serif; }
+.manual-highlight-palette { display: inline-flex; align-items: center; gap: 6px; }
 .mini { display: inline-flex; padding: 5px; border: 1px solid transparent; background: transparent; color: #7a837b; border-radius: 6px; cursor: pointer; }
 .mini:hover { background: rgba(0,0,0,.06); }
 .swatch { width: 16px; height: 16px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; }
@@ -388,7 +395,9 @@ h1, h2 { font-family: "Manrope", sans-serif; }
 .study-item p { margin: 0; font: 400 13px/1.7 "Manrope", sans-serif; color: #454d46; }
 .empty-study { display: grid; justify-items: center; gap: 6px; padding: 50px 0; color: #8a918a; font-size: 13px; }
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 50; padding: 9px 16px; background: #222; color: #fff; border-radius: 20px; font: 600 12px "Manrope", sans-serif; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+.shared-data-notice { margin: 8px 24px 0; padding: 8px 11px; border: 1px solid #eadca8; border-radius: 6px; background: #fff9e6; color: #66551f; font: 500 11px/1.5 "Manrope", sans-serif; }
 .app-shell[data-theme="dark"] .reader-toolbar { background: #151a16; border-color: #2c352e; }
+.app-shell[data-theme="dark"] .shared-data-notice { border-color: #554a2c; background: #302b1d; color: #e2d39e; }
 .app-shell[data-theme="dark"] .tool-btn, .app-shell[data-theme="dark"] .ghost-button, .app-shell[data-theme="dark"] .study-item, .app-shell[data-theme="dark"] .note-composer textarea { background: #1d241f; border-color: #2f3a31; color: #d4ddd5; }
 .app-shell[data-theme="dark"] .study-item p, .app-shell[data-theme="dark"] .note-actions button, .app-shell[data-theme="dark"] .mini { color: #aab5ac; }
 .app-shell[data-theme="dark"] .note-item { background: #2b2714; color: #e6e0c4; }

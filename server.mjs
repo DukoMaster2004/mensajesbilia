@@ -19,11 +19,122 @@ let sourceCatalogPromise;
 const sourceDetailCache = new Map();
 const sourceSearchCache = new Map();
 
-app.use(express.json({ limit: "64kb" }));
+app.use(express.json({ limit: "2mb" }));
 
 function getGeminiApiKey() {
   return process.env.GEMINI_API_KEY || process.env.GEMINI_BIBLE_API_KEY;
 }
+
+const sharedCollections = new Set(["favorites", "notes", "highlights", "multiNotes", "chat"]);
+
+function getSupabaseConfig() {
+  const url = process.env.SUPABASE_URL?.replace(/\/+$/, "");
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) {
+    const error = new Error("La sincronización pública requiere SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY configuradas en el servidor.");
+    error.status = 503;
+    throw error;
+  }
+  return { url, key };
+}
+
+async function supabaseRequest(path, options = {}) {
+  const { url, key } = getSupabaseConfig();
+  const response = await fetch(`${url}/rest/v1/${path}`, {
+    ...options,
+    headers: {
+      apikey: key,
+      ...(key.startsWith("sb_secret_") ? {} : { Authorization: `Bearer ${key}` }),
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    const error = new Error("No se pudo sincronizar la información compartida.");
+    error.status = 502;
+    throw error;
+  }
+  return response;
+}
+
+function sharedCollection(value) {
+  if (!sharedCollections.has(value)) {
+    const error = new Error("La sección compartida indicada no existe.");
+    error.status = 404;
+    throw error;
+  }
+  return value;
+}
+
+app.get("/api/shared-state", async (request, response) => {
+  try {
+    const query = new URLSearchParams({ select: "collection,item_key,payload", order: "collection.asc,item_key.asc" });
+    if (request.query.collection) query.set("collection", `eq.${sharedCollection(String(request.query.collection))}`);
+    const result = await supabaseRequest(`shared_page_state?${query}`);
+    response.json({ entries: await result.json() });
+  } catch (error) {
+    response.status(error.status || 500).json({ error: error.status ? error.message : "No se pudo cargar la información compartida." });
+  }
+});
+
+app.put("/api/shared-state/:collection/:key", async (request, response) => {
+  try {
+    const collection = sharedCollection(request.params.collection);
+    const itemKey = request.params.key;
+    if (!itemKey || itemKey.length > 240) {
+      response.status(400).json({ error: "La clave del elemento no es válida." });
+      return;
+    }
+    const payload = request.body?.payload;
+    if (payload === undefined || Buffer.byteLength(JSON.stringify(payload)) > 1_000_000) {
+      response.status(400).json({ error: "El contenido compartido no es válido o excede el límite permitido." });
+      return;
+    }
+    if (collection === "chat") {
+      if (itemKey !== "global" || !Array.isArray(payload) || payload.length > 2000
+        || payload.some((message) => !message || !["assistant", "user"].includes(message.role) || typeof message.text !== "string")) {
+        response.status(400).json({ error: "La conversación compartida no tiene un formato válido." });
+        return;
+      }
+    } else {
+      const keyField = collection === "notes" || collection === "multiNotes" ? "id" : "key";
+      if (!payload || typeof payload !== "object" || Array.isArray(payload) || payload[keyField] !== itemKey) {
+        response.status(400).json({ error: "El elemento compartido no tiene un formato válido." });
+        return;
+      }
+      if (collection === "highlights" && !["yellow", "green", "blue", "pink"].includes(payload.color)) {
+        response.status(400).json({ error: "El color del resaltado no es válido." });
+        return;
+      }
+    }
+    const query = new URLSearchParams({ on_conflict: "collection,item_key" });
+    await supabaseRequest(`shared_page_state?${query}`, {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({ collection, item_key: itemKey, payload }),
+    });
+    response.status(204).end();
+  } catch (error) {
+    response.status(error.status || 500).json({ error: error.status ? error.message : "No se pudo guardar la información compartida." });
+  }
+});
+
+app.delete("/api/shared-state/:collection/:key", async (request, response) => {
+  try {
+    const collection = sharedCollection(request.params.collection);
+    const itemKey = request.params.key;
+    if (!itemKey || itemKey.length > 240) {
+      response.status(400).json({ error: "La clave del elemento no es válida." });
+      return;
+    }
+    const query = new URLSearchParams({ collection: `eq.${collection}`, item_key: `eq.${itemKey}` });
+    await supabaseRequest(`shared_page_state?${query}`, { method: "DELETE", headers: { Prefer: "return=minimal" } });
+    response.status(204).end();
+  } catch (error) {
+    response.status(error.status || 500).json({ error: error.status ? error.message : "No se pudo eliminar la información compartida." });
+  }
+});
 
 let catalogPromise;
 let audioCatalogPromise;

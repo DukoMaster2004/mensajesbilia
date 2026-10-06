@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import Icon from "./Icon.jsx";
 import { HIGHLIGHT_COLORS, itemKey, shareContent } from "./useStudyData.js";
+import { HighlightableText } from "./HighlightableText.jsx";
 
 const COLOR_LABEL = { yellow: "Amarillo", green: "Verde", blue: "Azul", pink: "Rosa" };
 
@@ -119,13 +120,18 @@ export function MessageReader({ message, loading, error, onRetry, jumpTo, onBack
           const key = itemKey(message.id, p.number);
           const fav = study.favorites.some((f) => f.key === key);
           const hl = study.highlights.find((h) => h.key === key);
+          const textHighlights = study.highlights.filter((h) => h.messageId === message.id && h.number === p.number && Number.isInteger(h.start) && Number.isInteger(h.end));
           const notes = study.notes.filter((n) => n.messageId === message.id && n.number === p.number);
           const item = { messageId: message.id, number: p.number, title: message.title, text: p.text };
           return (
             <section className={`paragraph${hl ? ` hl hl-${hl.color}` : ""}${jumpTo === p.number ? " jumped" : ""}`} id={`p-${p.number}`} key={p.number}>
               <span className="paragraph-number">{p.number}</span>
               <div className="paragraph-body">
-                <p>{p.text}</p>
+                <p><HighlightableText text={p.text} highlights={textHighlights}
+                  onSave={(start, end, color) => {
+                    study.setTextHighlight(item, start, end, color);
+                    onToast("Resaltado actualizado");
+                  }} /></p>
                 <div className="paragraph-actions">
                   {HIGHLIGHT_COLORS.map((c) => (
                     <button key={c} className={`swatch swatch-${c}${hl?.color === c ? " on" : ""}`} aria-label={`Resaltar ${COLOR_LABEL[c]}`} title={`Resaltar ${COLOR_LABEL[c]}`}
@@ -189,11 +195,11 @@ export function StudyListView({ kind, study, onOpen, onToast }) {
             return (
               <div className={`study-item${kind === "highlights" ? ` hl hl-${it.color}` : ""}`} key={it.key}>
                 <button className="note-source" onClick={open}>{ref}</button>
-                {it.text && <p>{it.text}</p>}
+                {it.text && <p>{it.start !== undefined && it.end !== undefined ? it.text.slice(it.start, it.end) : it.text}</p>}
                 <div className="note-actions">
                   <button onClick={open}><Icon name="arrow" size={14} /> Abrir</button>
                   <button onClick={async () => onToast(await shareContent({ title: `${ref}`, text: it.text ? `“${it.text}”` : it.title }))}><Icon name="share" size={14} /> Compartir</button>
-                  <button onClick={() => { kind === "favorites" ? study.toggleFavorite(it) : study.setHighlight(it, it.color); onToast("Eliminado"); }}><Icon name="trash" size={14} /> Quitar</button>
+                  <button onClick={() => { kind === "favorites" ? study.toggleFavorite(it) : study.removeHighlight(it.key); onToast("Eliminado"); }}><Icon name="trash" size={14} /> Quitar</button>
                 </div>
               </div>
             );

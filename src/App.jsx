@@ -53,6 +53,7 @@ function App() {
   const [selectedParagraph, setSelectedParagraph] = useState(null);
   const [loadingMessage, setLoadingMessage] = useState(false);
   const [chat, setChat] = useState(readSavedChat);
+  const [chatSyncError, setChatSyncError] = useState("");
   const [draft, setDraft] = useState("");
   const [chatError, setChatError] = useState("");
   const [sending, setSending] = useState(false);
@@ -68,6 +69,75 @@ function App() {
   }, []);
   const chatEndRef = useRef(null);
   const inputRef = useRef(null);
+  const chatReadyRef = useRef(false);
+  const chatPendingRef = useRef(0);
+  const chatSnapshotRef = useRef("");
+  const chatWriteVersionRef = useRef(0);
+  const chatWriteQueue = useRef(Promise.resolve());
+  const chatLatestRef = useRef(chat);
+  const chatInitialRef = useRef(chat);
+
+  const enqueueChatSave = useCallback((messages) => {
+    const snapshot = JSON.stringify(messages);
+    chatPendingRef.current += 1;
+    chatWriteQueue.current = chatWriteQueue.current.then(async () => {
+      try {
+        await api("/api/shared-state/chat/global", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ payload: messages }),
+        });
+        chatSnapshotRef.current = snapshot;
+        chatWriteVersionRef.current += 1;
+        setChatSyncError("");
+      } catch (error) {
+        setChatSyncError(error.message);
+        window.setTimeout(() => {
+          if (chatReadyRef.current && chatSnapshotRef.current !== snapshot && JSON.stringify(chatLatestRef.current) === snapshot) {
+            enqueueChatSave(chatLatestRef.current);
+          }
+        }, 5000);
+      } finally {
+        chatPendingRef.current -= 1;
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let initialized = false;
+    async function synchronizeChat() {
+      const versionAtRequest = chatWriteVersionRef.current;
+      try {
+        const result = await api("/api/shared-state?collection=chat");
+        if (cancelled) return;
+        if (initialized && (versionAtRequest !== chatWriteVersionRef.current || chatPendingRef.current > 0)) return;
+        const remote = result.entries?.find((entry) => entry.item_key === "global")?.payload || initialChat;
+        const snapshot = JSON.stringify(remote);
+        if (!initialized) {
+          initialized = true;
+          const localChat = readSavedChat();
+          if (localChat.length > 1) {
+            try { localStorage.setItem("branham-chat-local-backup", JSON.stringify(localChat)); } catch { /* local backup unavailable */ }
+          }
+          const pendingLocalChat = JSON.stringify(chatLatestRef.current) !== JSON.stringify(chatInitialRef.current);
+          chatSnapshotRef.current = snapshot;
+          chatReadyRef.current = true;
+          if (pendingLocalChat) enqueueChatSave(chatLatestRef.current);
+          else setChat(remote);
+        } else if (!chatPendingRef.current && snapshot !== chatSnapshotRef.current) {
+          chatSnapshotRef.current = snapshot;
+          setChat(remote);
+        }
+        setChatSyncError("");
+      } catch (error) {
+        if (!cancelled) setChatSyncError(error.message);
+      }
+    }
+    synchronizeChat();
+    const interval = window.setInterval(synchronizeChat, 5000);
+    return () => { cancelled = true; window.clearInterval(interval); };
+  }, []);
 
   const loadMessages = useCallback(async (search = "", offset = 0, append = false) => {
     setLoadingList(true);
@@ -93,9 +163,22 @@ function App() {
   }, [query, loadMessages]);
 
   useEffect(() => {
+    chatLatestRef.current = chat;
     localStorage.setItem("branham-chat", JSON.stringify(chat));
     chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [chat]);
+    if (!chatReadyRef.current) return;
+    const snapshot = JSON.stringify(chat);
+    if (snapshot === chatSnapshotRef.current) return;
+    enqueueChatSave(chat);
+  }, [chat, enqueueChatSave]);
+
+  useEffect(() => {
+    if (study.syncError) showToast(study.syncError);
+  }, [study.syncError, showToast]);
+
+  useEffect(() => {
+    if (chatSyncError) showToast(chatSyncError);
+  }, [chatSyncError, showToast]);
 
   useEffect(() => {
     try {
@@ -229,6 +312,10 @@ function App() {
           <div className="breadcrumbs"><span>Biblioteca</span><Icon name="right" size={14} /><strong>{section === "chat" ? "Chat con IA" : section === "settings" ? "Configuración" : section === "favorites" ? "Favoritos" : section === "notes" ? "Notas" : section === "highlights" ? "Resaltados" : section === "multinotes" ? "Nota múltiple" : section === "bible" ? "Biblia" : selectedMessage?.title || "Mensajes"}</strong></div>
           <div className="topbar-meta"><span className="status-dot" /> Catálogo disponible</div>
         </header>
+
+        <aside className="shared-data-notice" role="note">
+          Favoritos, notas, resaltados y conversaciones son públicos y se comparten con todos los visitantes.
+        </aside>
 
         {section === "library" && (
           selectedId ? (

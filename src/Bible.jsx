@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Icon from "./Icon.jsx";
 import { HIGHLIGHT_COLORS, itemKey, shareContent } from "./useStudyData.js";
 import { NoteComposer, NoteItem } from "./StudyViews.jsx";
+import { HighlightableText } from "./HighlightableText.jsx";
 
 const COLOR_LABEL = { yellow: "Amarillo", green: "Verde", blue: "Azul", pink: "Rosa" };
 
@@ -204,12 +205,17 @@ export function BibleView({ onToast, study, target }) {
                 const key = itemKey(id, v.verse);
                 const fav = study.favorites.some((f) => f.key === key);
                 const hl = study.highlights.find((h) => h.key === key);
+                const textHighlights = study.highlights.filter((h) => h.messageId === id && h.number === v.verse && Number.isInteger(h.start) && Number.isInteger(h.end));
                 const notes = study.notes.filter((n) => n.messageId === id && n.number === v.verse);
                 const title = `${chapter.book} ${chapter.chapter}`;
                 const item = { messageId: id, number: v.verse, title, text: v.text, bible: { book: pos.book, chapter: chapter.chapter, verse: v.verse } };
                 return (
                   <div key={v.verse} id={`bv-${v.verse}`} className={`bible-verse${hl ? ` hl hl-${hl.color}` : ""}${focus === v.verse ? " focus" : ""}`}>
-                    <p><sup>{v.verse}</sup>{" "}{v.text}</p>
+                    <p><sup>{v.verse}</sup>{" "}<HighlightableText text={v.text} highlights={textHighlights}
+                      onSave={(start, end, color) => {
+                        study.setTextHighlight(item, start, end, color);
+                        onToast("Resaltado actualizado");
+                      }} /></p>
                     <div className="paragraph-actions">
                       {HIGHLIGHT_COLORS.map((c) => (
                         <button key={c} className={`swatch swatch-${c}${hl?.color === c ? " on" : ""}`} aria-label={`Resaltar ${COLOR_LABEL[c]}`} title={`Resaltar ${COLOR_LABEL[c]}`}
