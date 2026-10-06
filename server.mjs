@@ -207,9 +207,11 @@ app.get("/api/auth/google/callback", async (request, response) => {
       || Number(identity.exp) <= Math.floor(Date.now() / 1000) || ![true, "true"].includes(identity.email_verified) || !identity.sub || !identity.email) {
       throw new Error("Google no confirmó una cuenta verificada.");
     }
-    recordGoogleUser(identity).catch((error) => {
+    try {
+      await recordGoogleUser(identity);
+    } catch (error) {
       console.error("No se pudo registrar el usuario en Supabase:", error.message);
-    });
+    }
     const sessionToken = signSession({
       sub: identity.sub,
       email: identity.email,
