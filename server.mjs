@@ -117,12 +117,24 @@ function isSameOriginRequest(request) {
   }
 }
 
+function splitList(value) {
+  return String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function isAdminSession(session) {
+  if (!session) return false;
+  const emails = new Set(splitList(process.env.ADMIN_EMAILS).map((email) => email.toLowerCase()));
+  return splitList(process.env.ADMIN_USER_IDS).includes(session.userId)
+    || emails.has(String(session.email || "").toLowerCase());
+}
+
 app.get("/api/auth/session", (request, response) => {
   response.setHeader("Cache-Control", "no-store");
   const session = getGoogleSession(request);
   response.json({
     configured: Boolean(getGoogleConfig()),
     authenticated: Boolean(session),
+    isAdmin: isAdminSession(session),
     user: session ? {
       userId: session.userId,
       email: session.email,
@@ -262,6 +274,32 @@ async function supabaseRequest(path, options = {}) {
   return response;
 }
 
+async function fetchAllPages(table, query) {
+  const rows = [];
+  let offset = 0;
+  while (true) {
+    const result = await supabaseRequest(`${table}?${query}`, {
+      headers: {
+        "Range-Unit": "items",
+        Range: `${offset}-${offset + 999}`,
+        Prefer: "count=exact",
+      },
+    });
+    const batch = await result.json();
+    if (!Array.isArray(batch)) {
+      const error = new Error("La información recibida de Supabase no tiene un formato válido.");
+      error.status = 502;
+      throw error;
+    }
+    rows.push(...batch);
+    const total = Number(result.headers.get("content-range")?.split("/")[1]);
+    if (batch.length === 0 || (Number.isFinite(total) && rows.length >= total)
+      || (!Number.isFinite(total) && batch.length < 1000)) break;
+    offset += batch.length;
+  }
+  return rows;
+}
+
 async function recordGoogleUser(identity) {
   const query = new URLSearchParams({ on_conflict: "user_id" });
   await supabaseRequest(`google_users?${query}`, {
@@ -292,28 +330,7 @@ app.get("/api/shared-state", async (request, response) => {
     if (request.query.collection) query.set("collection", `eq.${sharedCollection(String(request.query.collection))}`);
     const session = getGoogleSession(request);
     query.set("owner_id", session ? `in.(public,${session.userId})` : "eq.public");
-    const entries = [];
-    let offset = 0;
-    while (true) {
-      const result = await supabaseRequest(`shared_page_state?${query}`, {
-        headers: {
-          "Range-Unit": "items",
-          Range: `${offset}-${offset + 999}`,
-          Prefer: "count=exact",
-        },
-      });
-      const batch = await result.json();
-      if (!Array.isArray(batch)) {
-        const error = new Error("La información compartida recibida no tiene un formato válido.");
-        error.status = 502;
-        throw error;
-      }
-      entries.push(...batch);
-      const total = Number(result.headers.get("content-range")?.split("/")[1]);
-      if (batch.length === 0 || (Number.isFinite(total) && entries.length >= total)
-        || (!Number.isFinite(total) && batch.length < 1000)) break;
-      offset += batch.length;
-    }
+    const entries = await fetchAllPages("shared_page_state", query);
     const visibleEntries = new Map();
     for (const entry of entries) {
       const identity = `${entry.collection}\u0000${entry.item_key}`;
@@ -421,6 +438,126 @@ app.delete("/api/shared-state/:collection/:key", async (request, response) => {
     response.status(204).end();
   } catch (error) {
     response.status(error.status || 500).json({ error: error.status ? error.message : "No se pudo eliminar la información compartida." });
+  }
+});
+
+const activityCollections = ["favorites", "notes", "highlights", "multiNotes"];
+const activityPreviewLimit = 60;
+
+function previewText(value, limit = 500) {
+  const text = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
+  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
+
+function activitySource(payload) {
+  const title = previewText(payload?.title, 160);
+  if (!payload?.number) return title || String(payload?.messageId || "");
+  return [title, `${payload.bible ? "versículo" : "párrafo"} ${payload.number}`].filter(Boolean).join(" · ");
+}
+
+function highlightQuote(payload) {
+  const text = typeof payload?.text === "string" ? payload.text : "";
+  if (Number.isInteger(payload?.start) && Number.isInteger(payload?.end) && payload.end > payload.start) {
+    return previewText(text.slice(payload.start, payload.end), 240);
+  }
+  return previewText(text, 240);
+}
+
+function summarizeActivity(collection, payload) {
+  switch (collection) {
+    case "favorites":
+      return { source: activitySource(payload), createdAt: payload.createdAt || null };
+    case "notes":
+      return { source: activitySource(payload), quote: previewText(payload.quote, 240), text: previewText(payload.text), updatedAt: payload.updatedAt || payload.createdAt || null };
+    case "highlights":
+      return { source: activitySource(payload), color: payload.color || "yellow", quote: highlightQuote(payload), createdAt: payload.createdAt || null };
+    case "multiNotes":
+      return { title: previewText(payload.title, 160), text: previewText(payload.text), quotes: Array.isArray(payload.quotes) ? payload.quotes.length : 0, updatedAt: payload.updatedAt || null };
+    case "chat": {
+      const messages = Array.isArray(payload) ? payload : [];
+      const lastQuestion = [...messages].reverse().find((message) => message?.role === "user");
+      return { messages: messages.length, lastQuestion: previewText(lastQuestion?.text, 240) };
+    }
+    default:
+      return null;
+  }
+}
+
+function emptyActivity() {
+  return {
+    counts: Object.fromEntries([...activityCollections, "chat"].map((collection) => [collection, 0])),
+    items: Object.fromEntries(activityCollections.map((collection) => [collection, []])),
+    chat: null,
+    lastActivityAt: "",
+  };
+}
+
+app.get("/api/admin/activity", async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  const session = getGoogleSession(request);
+  if (!session) {
+    response.status(401).json({ error: "Inicia sesión con Google para ver la actividad." });
+    return;
+  }
+  if (!isAdminSession(session)) {
+    response.status(403).json({ error: "Solo la cuenta administradora puede ver la actividad de los usuarios." });
+    return;
+  }
+  try {
+    const [accounts, entries] = await Promise.all([
+      fetchAllPages("google_users", new URLSearchParams({ select: "user_id,email,name,picture,created_at,last_login_at" })),
+      fetchAllPages("shared_page_state", new URLSearchParams({ select: "owner_id,collection,item_key,payload,updated_at", owner_id: "neq.public" })),
+    ]);
+    const activity = new Map();
+    for (const entry of entries) {
+      if (!sharedCollections.has(entry.collection) || entry.payload?._deleted) continue;
+      const summary = summarizeActivity(entry.collection, entry.payload);
+      if (!summary) continue;
+      let record = activity.get(entry.owner_id);
+      if (!record) {
+        record = emptyActivity();
+        activity.set(entry.owner_id, record);
+      }
+      if (entry.collection === "chat") {
+        record.counts.chat += summary.messages;
+        if (!record.chat || String(entry.updated_at || "") > String(record.chat.updatedAt || "")) {
+          record.chat = { ...summary, updatedAt: entry.updated_at || null };
+        }
+      } else {
+        record.counts[entry.collection] += 1;
+        if (record.items[entry.collection].length < activityPreviewLimit) record.items[entry.collection].push(summary);
+      }
+      if (entry.updated_at && entry.updated_at > record.lastActivityAt) record.lastActivityAt = entry.updated_at;
+    }
+    const registered = new Set(accounts.map((account) => account.user_id));
+    for (const ownerId of activity.keys()) {
+      if (!registered.has(ownerId)) accounts.push({ user_id: ownerId });
+    }
+    const users = accounts.map((account) => {
+      const record = activity.get(account.user_id) || emptyActivity();
+      return {
+        userId: account.user_id,
+        email: account.email || "",
+        name: account.name || "",
+        picture: account.picture || "",
+        registered: registered.has(account.user_id),
+        registeredAt: account.created_at || null,
+        lastLoginAt: account.last_login_at || null,
+        lastActivityAt: record.lastActivityAt || null,
+        counts: record.counts,
+        items: record.items,
+        chat: record.chat,
+      };
+    });
+    const recency = (user) => [user.lastLoginAt, user.lastActivityAt, user.registeredAt].filter(Boolean).sort().pop() || "";
+    users.sort((a, b) => recency(b).localeCompare(recency(a)));
+    const totals = { users: users.length };
+    for (const collection of [...activityCollections, "chat"]) {
+      totals[collection] = users.reduce((sum, user) => sum + user.counts[collection], 0);
+    }
+    response.json({ generatedAt: new Date().toISOString(), totals, users });
+  } catch (error) {
+    response.status(error.status || 500).json({ error: error.status ? error.message : "No se pudo cargar la actividad de los usuarios." });
   }
 });
 

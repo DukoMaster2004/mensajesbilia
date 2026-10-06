@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Icon from "./Icon.jsx";
+import { AdminActivityView } from "./AdminActivity.jsx";
 import { BibleView } from "./Bible.jsx";
 import { MultiNotesView } from "./MultiNotes.jsx";
 import { MessageReader, StudyListView } from "./StudyViews.jsx";
@@ -41,7 +42,7 @@ function readPreference(key, fallback, choices) {
 
 function App() {
   const [section, setSection] = useState("library");
-  const [authSession, setAuthSession] = useState({ configured: false, authenticated: false, user: null, loading: true });
+  const [authSession, setAuthSession] = useState({ configured: false, authenticated: false, isAdmin: false, user: null, loading: true });
   const [theme, setTheme] = useState(() => readPreference("branham-theme", "light", ["light", "dark"]));
   const [textSize, setTextSize] = useState(() => readPreference("branham-text-size", "medium", ["small", "medium", "large"]));
   const [query, setQuery] = useState("");
@@ -99,7 +100,7 @@ function App() {
       })
       .catch((error) => {
         if (!cancelled) {
-          setAuthSession({ configured: false, authenticated: false, user: null, loading: false });
+          setAuthSession({ configured: false, authenticated: false, isAdmin: false, user: null, loading: false });
           showToast(error.message);
         }
       });
@@ -108,7 +109,8 @@ function App() {
 
   useEffect(() => {
     const handleExpired = () => {
-      setAuthSession((session) => ({ ...session, authenticated: false, user: null }));
+      setAuthSession((session) => ({ ...session, authenticated: false, isAdmin: false, user: null }));
+      setSection((current) => (current === "users" ? "library" : current));
       showToast("La sesión terminó. Vuelve a entrar con Google para guardar tus cambios.");
     };
     window.addEventListener("google-session-expired", handleExpired);
@@ -122,7 +124,8 @@ function App() {
   async function signOut() {
     try {
       await api("/api/auth/session", { method: "DELETE" });
-      setAuthSession((session) => ({ ...session, authenticated: false, user: null }));
+      setAuthSession((session) => ({ ...session, authenticated: false, isAdmin: false, user: null }));
+      setSection((current) => (current === "users" ? "library" : current));
       showToast("Sesión cerrada");
     } catch (error) {
       showToast(error.message);
@@ -355,6 +358,11 @@ function App() {
           <button className={section === "settings" ? "nav-item active" : "nav-item"} onClick={() => navigate("settings")}>
             <Icon name="settings" /><span>Configuración</span>
           </button>
+          {authSession.isAdmin && (
+            <button className={section === "users" ? "nav-item active" : "nav-item"} onClick={() => navigate("users")}>
+              <Icon name="users" /><span>Usuarios</span>
+            </button>
+          )}
         </nav>
         <div className="sidebar-bottom">
           <div className="source-card">
@@ -373,7 +381,7 @@ function App() {
           <button className="icon-button mobile-menu" onClick={() => setMobileNavOpen(true)} aria-label="Abrir menú">
             <Icon name="menu" />
           </button>
-          <div className="breadcrumbs"><span>Biblioteca</span><Icon name="right" size={14} /><strong>{section === "chat" ? "Chat con IA" : section === "settings" ? "Configuración" : section === "favorites" ? "Favoritos" : section === "notes" ? "Notas" : section === "highlights" ? "Resaltados" : section === "multinotes" ? "Nota múltiple" : section === "bible" ? "Biblia" : selectedMessage?.title || "Mensajes"}</strong></div>
+          <div className="breadcrumbs"><span>Biblioteca</span><Icon name="right" size={14} /><strong>{section === "chat" ? "Chat con IA" : section === "settings" ? "Configuración" : section === "users" ? "Usuarios" : section === "favorites" ? "Favoritos" : section === "notes" ? "Notas" : section === "highlights" ? "Resaltados" : section === "multinotes" ? "Nota múltiple" : section === "bible" ? "Biblia" : selectedMessage?.title || "Mensajes"}</strong></div>
           <div className="topbar-meta"><span className="status-dot" /> Catálogo disponible</div>
           <button className="session-button" disabled={authSession.loading}
             title={authSession.user?.email ? `Cuenta Google: ${authSession.user.email}` : "Inicia sesión con una cuenta de Google"}
@@ -500,6 +508,7 @@ function App() {
             setTextSize={setTextSize}
           />
         )}
+        {section === "users" && authSession.isAdmin && <AdminActivityView />}
       </main>
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
