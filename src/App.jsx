@@ -112,7 +112,8 @@ function App() {
         const result = await api("/api/shared-state?collection=chat");
         if (cancelled) return;
         if (initialized && (versionAtRequest !== chatWriteVersionRef.current || chatPendingRef.current > 0)) return;
-        const remote = result.entries?.find((entry) => entry.item_key === "global")?.payload || initialChat;
+        const remoteEntry = result.entries?.find((entry) => entry.item_key === "global");
+        const remote = remoteEntry?.payload || initialChat;
         const snapshot = JSON.stringify(remote);
         if (!initialized) {
           initialized = true;
@@ -124,6 +125,7 @@ function App() {
           chatSnapshotRef.current = snapshot;
           chatReadyRef.current = true;
           if (pendingLocalChat) enqueueChatSave(chatLatestRef.current);
+          else if (!remoteEntry && localChat.length > 1) setChat(localChat);
           else setChat(remote);
         } else if (!chatPendingRef.current && snapshot !== chatSnapshotRef.current) {
           chatSnapshotRef.current = snapshot;

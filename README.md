@@ -34,7 +34,7 @@ Para activar la sincronización:
 2. Configura `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY` como variables de entorno del servidor (en `.env` o `.env.local` al desarrollar localmente) y del despliegue de Vercel. La clave `service_role` es secreta; nunca la pongas en el código del navegador.
 3. Despliega de nuevo. Las pestañas abiertas reciben actualizaciones periódicamente.
 
-Mientras las variables no estén configuradas, la sincronización muestra un error y los datos de estudio siguen guardándose localmente. Los datos locales anteriores se conservan como copia en `localStorage` (`branham-study-local-backup` y `branham-chat-local-backup`); no se publican automáticamente.
+Al conectarse correctamente por primera vez, los elementos guardados localmente que aún no existan en el estado compartido se publican automáticamente; los elementos ya compartidos tienen prioridad. Antes de migrar, los datos locales se conservan como copia en `localStorage` (`branham-study-local-backup` y `branham-chat-local-backup`). Mientras las variables no estén configuradas, la sincronización muestra un error y los cambios nuevos siguen guardándose localmente.
 
 ## Biblia
 

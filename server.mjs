@@ -71,8 +71,29 @@ app.get("/api/shared-state", async (request, response) => {
   try {
     const query = new URLSearchParams({ select: "collection,item_key,payload", order: "collection.asc,item_key.asc" });
     if (request.query.collection) query.set("collection", `eq.${sharedCollection(String(request.query.collection))}`);
-    const result = await supabaseRequest(`shared_page_state?${query}`);
-    response.json({ entries: await result.json() });
+    const entries = [];
+    let offset = 0;
+    while (true) {
+      const result = await supabaseRequest(`shared_page_state?${query}`, {
+        headers: {
+          "Range-Unit": "items",
+          Range: `${offset}-${offset + 999}`,
+          Prefer: "count=exact",
+        },
+      });
+      const batch = await result.json();
+      if (!Array.isArray(batch)) {
+        const error = new Error("La información compartida recibida no tiene un formato válido.");
+        error.status = 502;
+        throw error;
+      }
+      entries.push(...batch);
+      const total = Number(result.headers.get("content-range")?.split("/")[1]);
+      if (batch.length === 0 || (Number.isFinite(total) && entries.length >= total)
+        || (!Number.isFinite(total) && batch.length < 1000)) break;
+      offset += batch.length;
+    }
+    response.json({ entries });
   } catch (error) {
     response.status(error.status || 500).json({ error: error.status ? error.message : "No se pudo cargar la información compartida." });
   }

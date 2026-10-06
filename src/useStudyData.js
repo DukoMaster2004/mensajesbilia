@@ -120,13 +120,16 @@ export function useStudyData() {
           for (const collection of collections) {
             const oldItems = new Map((oldData[collection] || []).map((item) => [sharedItemKey(collection, item), item]));
             const currentItems = new Map((currentData[collection] || []).map((item) => [sharedItemKey(collection, item), item]));
+            const items = merged[collection];
+            for (const [key, item] of oldItems) {
+              if (!items.some((remoteItem) => sharedItemKey(collection, remoteItem) === key)) items.push(item);
+            }
             const keys = new Set([...oldItems.keys(), ...currentItems.keys()]);
             for (const key of keys) {
               const before = oldItems.get(key);
               const after = currentItems.get(key);
               if (JSON.stringify(before) === JSON.stringify(after)) continue;
               dirty.current.set(`${collection}\u0000${key}`, { collection, key, payload: after, signature: JSON.stringify(after) });
-              const items = merged[collection];
               const index = items.findIndex((item) => sharedItemKey(collection, item) === key);
               if (after === undefined) {
                 if (index !== -1) items.splice(index, 1);
